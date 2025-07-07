@@ -1,0 +1,15 @@
+
+{
+  "name": "suno-mv-maker",
+  "version": "1.0.0",
+  "description": "Electron app to generate spectrum music videos from Suno song URLs",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.1.3"
+  }
+}
