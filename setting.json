@@ -1,0 +1,5 @@
+{
+  "ffmpegPath": "C:/Program Files/ffmpeg/bin/ffmpeg.exe",
+  "ffprobePath": "C:/Program Files/ffmpeg/bin/ffprobe.exe",
+  "outputDir": "./output"
+}

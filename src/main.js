@@ -1,6 +1,23 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { exec } = require('child_process');
+const fs = require('fs');
+
+function getConfigPath() {
+  // プロジェクト直下の場合
+  return path.join(__dirname, '../setting.json');
+}
+
+function loadConfig() {
+  const configPath = getConfigPath();
+  if (fs.existsSync(configPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -8,33 +25,26 @@ function createWindow() {
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: true,
     }
   });
 
   win.loadFile(path.join(__dirname, '../public/index.html'));
-  
-  // メインで生成リクエストを受け、nodeスクリプトを実行
-  ipcMain.handle('generate-mp4', async (event, { url, imagePath }) => {
-    const scriptPath = path.join(__dirname, 'suno_mv.js');
-    let cmd = `node "${scriptPath}" "${url}" "./output" "1280x720" "spectrum"`;
-    if (imagePath) cmd += ` "${imagePath}"`;
-    return new Promise((resolve, reject) => {
-      exec(cmd, (err, stdout, stderr) => {
-        if (err) {
-          // stdout, stderr も必ず返す
-          resolve({ success: false, stdout, stderr });
-        } else {
-          resolve({ success: true, stdout, stderr });
-        }
-      });
-    });
+
+  // 設定リクエスト
+  ipcMain.handle('get-config', async () => {
+    const cfg = loadConfig();
+    if (!cfg || !cfg.ffmpegPath || !fs.existsSync(cfg.ffmpegPath)) {
+      return { error: 'setting.jsonが存在しない、またはffmpegパスが無効です。' };
+    }
+    return cfg;
   });
 }
 
 app.whenReady().then(createWindow);
-
 app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") app.quit();
+});
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
