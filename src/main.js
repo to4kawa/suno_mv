@@ -27,8 +27,7 @@ ipcMain.handle('generate-mp4-with-suno-cover', async (event, { url }) => {
             const mp3Buf = Buffer.from(await mp3Res.arrayBuffer());
             fs.writeFileSync(tempMp3Path, mp3Buf);
         }
-
-        const outputVideoPath = path.join(appPath, 'output.mp4');
+        const outputVideoPath = path.join(appPath, `${id}.mp4`);
         const ffmpegArgs = [
             '-loop', '1', '-i', tempImagePath,
             '-i', tempMp3Path,
