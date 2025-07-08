@@ -44,6 +44,8 @@ window.onload = () => {
     };
 
     // 動画生成
+    // ...（略）window.onload = () => { ... のなか
+
     generateBtn.onclick = async () => {
         const url = urlInput.value.trim();
         const m = url.match(/song\/([a-f0-9-]+)/);
@@ -52,16 +54,26 @@ window.onload = () => {
             return;
         }
 
+        // Suno画像プレビューか、カスタム画像（data-base64）がどちらか必須
+        const isSunoCover = previewImg.getAttribute("data-cover-id") && previewImg.getAttribute("data-cover-id") !== "custom";
         const base64 = previewImg.getAttribute("data-base64");
-        if (!base64 || !base64.startsWith('data:image')) {
-            alert("画像をドロップしてください");
+
+        if (!isSunoCover && (!base64 || !base64.startsWith('data:image'))) {
+            alert("画像をドロップするか、プレビュー画像を表示してください");
             return;
         }
 
         logArea.textContent = "動画生成中…\n";
 
         try {
-            const result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
+            let result;
+            if (isSunoCover) {
+                // サーバ側で自動的にカバー画像を取得（base64送信不要）
+                result = await window.electronAPI.generateMP4WithSunoCover({ url });
+            } else {
+                // カスタム画像
+                result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
+            }
             if (result.success) {
                 alert("✅ 完了！outputフォルダを確認してください");
                 logArea.textContent += result.stdout;
@@ -74,4 +86,3 @@ window.onload = () => {
             logArea.textContent += "IPCエラー: " + e.message;
         }
     };
-};
