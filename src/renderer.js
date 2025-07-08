@@ -55,8 +55,8 @@ window.onload = () => {
         const isSunoCover = previewImg.getAttribute("data-cover-id") !== "custom";
         const base64 = previewImg.getAttribute("data-base64");
 
-        if (!isSunoCover && (!base64 || !base64.startsWith("data:image"))) {
-            alert("画像をドロップするか、SunoのURLを入力してください");
+        if (!isSunoCover && (!base64 || !base64.startsWith('data:image'))) {
+            alert("画像をドロップするか、プレビュー画像を選択してください");
             return;
         }
 
@@ -65,10 +65,9 @@ window.onload = () => {
         try {
             let result;
             if (isSunoCover) {
-                // Suno画像を使う場合
+                // ✅ ハンドラ名を統一
                 result = await window.electronAPI.generateMP4WithSunoCover({ url });
             } else {
-                // カスタム画像を使う場合
                 result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
             }
 
