@@ -55,27 +55,26 @@ window.onload = () => {
     };
 
     // 動画生成
-    generateBtn.onclick = async () => {
-        const url = urlInput.value.trim();
-        const m = url.match(/song\/([a-f0-9-]+)/);
-        if (!m) {
-            alert("Suno曲のURLを正しく入力してください");
-            return;
-        }
+    // generateBtn.onclick 修正版
+generateBtn.onclick = async () => {
+    const url = urlInput.value.trim();
+    const m = url.match(/song\/([a-f0-9-]+)/);
+    
+    if (!m) {
+        alert("Suno曲のURLを正しく入力してください");
+        return;
+    }
 
-        let base64Image = null;
-        if (previewImg.getAttribute("data-cover-id") === "custom") {
-            base64Image = previewImg.getAttribute("data-base64");
-        }
+    const base64 = previewImg.getAttribute("data-base64");
+    if (!base64 || !base64.startsWith('data:image')) {
+        alert("画像をドラッグ＆ドロップしてください");
+        return;
+    }
 
-        logArea.textContent = "動画生成中…\n";
+    logArea.textContent = "動画生成中…\n";
 
-        // main.jsにbase64データを渡す
-        const result = await window.electronAPI.generateMP4WithBase64({
-            url,
-            base64: base64Image
-        });
-
+    try {
+        const result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
         if (result.success) {
             alert("✅ 完了！outputフォルダを確認してください");
             logArea.textContent += result.stdout;
@@ -83,5 +82,8 @@ window.onload = () => {
             alert("動画生成中にエラーが発生しました\n\n" + (result.stderr || "詳細不明"));
             logArea.textContent += (result.stderr || "") + "\n" + (result.stdout || "");
         }
-    };
+    } catch (e) {
+        alert("IPC通信エラー:\n\n" + e.message);
+        logArea.textContent += "IPCエラー: " + e.message;
+    }
 };
