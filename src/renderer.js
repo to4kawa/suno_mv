@@ -5,7 +5,7 @@ window.onload = () => {
     const dropArea = document.getElementById("drop-area");
     const previewImg = document.getElementById("preview-img");
     const logArea = document.getElementById("log");
-    const settingsBtn = document.getElementById("settings-btn"); // 設定ボタンを追加
+    const settingsBtn = document.getElementById("settings-btn");
 
     // プレビュー
     previewBtn.onclick = () => {
@@ -24,13 +24,6 @@ window.onload = () => {
     };
 
     // 画像ドラッグ＆ドロップ
-    dropArea.ondragover = (e) => {
-        e.preventDefault();
-        dropArea.style.background = "#def";
-    };
-    dropArea.ondragleave = () => {
-        dropArea.style.background = "";
-    };
     dropArea.ondrop = (e) => {
         e.preventDefault();
         dropArea.style.background = "";
@@ -38,9 +31,10 @@ window.onload = () => {
         if (file && file.type.startsWith("image/")) {
             const reader = new FileReader();
             reader.onload = (event) => {
-                previewImg.src = event.target.result; // base64でプレビュー
+                const base64 = event.target.result;
+                previewImg.src = base64; // 🔁 base64でプレビュー
                 previewImg.setAttribute("data-cover-id", "custom");
-                previewImg.setAttribute("data-base64", event.target.result); // ファイルパスではなくbase64を保存
+                previewImg.setAttribute("data-base64", base64);
                 previewImg.removeAttribute("data-file");
             };
             reader.readAsDataURL(file);
@@ -49,41 +43,35 @@ window.onload = () => {
         }
     };
 
-    // 設定画面を開く
-    settingsBtn.onclick = () => {
-        window.electronAPI.openSettingsWindow();
-    };
-
     // 動画生成
-    // generateBtn.onclick 修正版
-generateBtn.onclick = async () => {
-    const url = urlInput.value.trim();
-    const m = url.match(/song\/([a-f0-9-]+)/);
-    
-    if (!m) {
-        alert("Suno曲のURLを正しく入力してください");
-        return;
-    }
-
-    const base64 = previewImg.getAttribute("data-base64");
-    if (!base64 || !base64.startsWith('data:image')) {
-        alert("画像をドラッグ＆ドロップしてください");
-        return;
-    }
-
-    logArea.textContent = "動画生成中…\n";
-
-    try {
-        const result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
-        if (result.success) {
-            alert("✅ 完了！outputフォルダを確認してください");
-            logArea.textContent += result.stdout;
-        } else {
-            alert("動画生成中にエラーが発生しました\n\n" + (result.stderr || "詳細不明"));
-            logArea.textContent += (result.stderr || "") + "\n" + (result.stdout || "");
+    generateBtn.onclick = async () => {
+        const url = urlInput.value.trim();
+        const m = url.match(/song\/([a-f0-9-]+)/);
+        if (!m) {
+            alert("Suno曲のURLを正しく入力してください");
+            return;
         }
-    } catch (e) {
-        alert("IPC通信エラー:\n\n" + e.message);
-        logArea.textContent += "IPCエラー: " + e.message;
-    }
+
+        const base64 = previewImg.getAttribute("data-base64");
+        if (!base64 || !base64.startsWith('data:image')) {
+            alert("画像をドロップしてください");
+            return;
+        }
+
+        logArea.textContent = "動画生成中…\n";
+
+        try {
+            const result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
+            if (result.success) {
+                alert("✅ 完了！outputフォルダを確認してください");
+                logArea.textContent += result.stdout;
+            } else {
+                alert("動画生成中にエラーが発生しました\n\n" + (result.stderr || "詳細不明"));
+                logArea.textContent += (result.stderr || "") + "\n" + (result.stdout || "");
+            }
+        } catch (e) {
+            alert("IPC通信エラー:\n\n" + e.message);
+            logArea.textContent += "IPCエラー: " + e.message;
+        }
+    };
 };
