@@ -1,17 +1,24 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process'); // 🔥 spawnを追加
 
+// ハードコードされたFFmpegパス
 const HARDCODED_FFMPEG_PATH = 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe';
 
-// ハードコードされたFFmpegパスを使用
+// IPC: MP4生成（base64画像使用）
 ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
     try {
         const appPath = app.getPath('userData');
         const tempImagePath = path.join(appPath, 'temp_cover.jpg');
         const outputVideoPath = path.join(appPath, 'output.mp4');
 
-        // base64があれば一時保存
+        // 一時ディレクトリが存在しない場合は作成
+        if (!fs.existsSync(appPath)) {
+            fs.mkdirSync(appPath, { recursive: true });
+        }
+
+        // base64データを一時保存
         if (base64 && base64.startsWith('data:image')) {
             const base64Data = base64.replace(/^data:image\/jpeg;base64,/, '');
             fs.writeFileSync(tempImagePath, Buffer.from(base64Data, 'base64'));
@@ -19,24 +26,28 @@ ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
             return { success: false, stderr: '画像データがありません' };
         }
 
-        // FFmpeg実行
+        // FFmpegコマンドの構築
         const ffmpegArgs = [
-            '-loop', '1',
-            '-i', tempImagePath,
+            '-loop', '1', '-i', tempImagePath,
             '-i', 'audio.mp3',
-            '-c:v', 'libx264',
-            '-preset', 'fast',
+            '-c:v', 'libx264', '-preset', 'fast',
             '-pix_fmt', 'yuv420p',
-            '-c:a', 'aac',
-            '-shortest',
+            '-c:a', 'aac', '-shortest',
+            '-movflags', '+faststart',
             outputVideoPath
         ];
 
+        // FFmpeg実行
         const ffmpeg = spawn(HARDCODED_FFMPEG_PATH, ffmpegArgs);
 
         let stdout = '', stderr = '';
-        ffmpeg.stdout.on('data', data => stdout += data.toString());
-        ffmpeg.stderr.on('data', data => stderr += data.toString());
+        ffmpeg.stdout.on('data', (data) => stdout += data.toString());
+        ffmpeg.stderr.on('data', (data) => stderr += data.toString());
+
+        // 🔍 spawnのエラーハンドリング追加
+        ffmpeg.on('error', (err) => {
+            console.error('FFmpeg実行エラー:', err);
+        });
 
         return new Promise((resolve, reject) => {
             ffmpeg.on('close', (code) => {
@@ -51,7 +62,6 @@ ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
         return { success: false, error: error.message };
     }
 });
-
 
 function getConfigPath() {
     return path.join(__dirname, '../setting.json');
