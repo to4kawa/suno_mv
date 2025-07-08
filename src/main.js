@@ -1,72 +1,60 @@
-const { ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
-const { exec } = require('child_process');
 
-// 設定ファイルの読み込み（ffmpegパス）
-let ffmpegPath = 'ffmpeg'; // デフォルト
-try {
-  const setting = JSON.parse(fs.readFileSync(path.join(__dirname, '../setting.json'), 'utf-8'));
-  if (setting.ffmpegPath) ffmpegPath = `"${setting.ffmpegPath}"`;
-} catch(e) {
-  // 設定ファイルなし→デフォルトでffmpeg
+// ハードコードされたFFmpegパス
+const HARDCODED_FFMPEG_PATH = 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe';
+
+function getConfigPath() {
+    return path.join(__dirname, '../setting.json');
 }
 
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
-      if (response.statusCode !== 200) return reject(`HTTP ${response.statusCode}`);
-      response.pipe(file);
-      file.on("finish", () => file.close(resolve));
-    }).on("error", reject);
-    file.on("error", (err) => {
-      fs.unlink(dest, () => reject(err));
-    });
-  });
-}
-
-// --- generate-mp4 Handler ---
-ipcMain.handle('generate-mp4', async (event, params) => {
-  try {
-    const { url, imagePath } = params;
-    const songId = (url.match(/song\/([a-f0-9-]+)/) || [])[1];
-    if (!songId) throw new Error("Invalid Suno URL!");
-
-    const outputDir = path.join(__dirname, '..', 'output');
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
-
-    const mp3Url = `https://cdn1.suno.ai/${songId}.mp3`;
-    const imgUrl = `https://cdn2.suno.ai/image_large_${songId}.jpeg`;
-    const mp3Path = path.join(outputDir, `${songId}.mp3`);
-    const imgPath = path.join(outputDir, `${songId}.jpg`);
-    const mp4Path = path.join(outputDir, `${songId}.mp4`);
-
-    // mp3ダウンロード
-    if (!fs.existsSync(mp3Path)) await download(mp3Url, mp3Path);
-
-    // カバー画像: ローカル指定か自動DL
-    if (imagePath && fs.existsSync(imagePath)) {
-      fs.copyFileSync(imagePath, imgPath);
-    } else if (!fs.existsSync(imgPath)) {
-      await download(imgUrl, imgPath);
+function loadConfig() {
+    const configPath = getConfigPath();
+    if (fs.existsSync(configPath)) {
+        try {
+            return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        } catch (e) {
+            console.error('設定ファイルの読み込みに失敗:', e);
+            return null;
+        }
     }
+    return null;
+}
 
-    // ffmpegコマンド作成（drawtextなしのシンプル版／必要なら追加可）
-    const cmd = `${ffmpegPath} -y -i "${mp3Path}" -loop 1 -i "${imgPath}" -shortest -c:v libx264 -profile:v high -pix_fmt yuv420p -c:a aac "${mp4Path}"`;
-
-    // 実行
-    await new Promise((resolve, reject) => {
-      exec(cmd, (err, stdout, stderr) => {
-        if (err) reject(stderr);
-        else resolve(stdout);
-      });
+function createWindow() {
+    const win = new BrowserWindow({
+        width: 1080,
+        height: 800,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            sandbox: true
+        }
     });
 
-    return { success: true, mp4Path };
+    win.loadFile(path.join(__dirname, '../public/index.html'));
 
-  } catch (err) {
-    return { success: false, error: err.toString() };
-  }
+    // 設定取得
+    ipcMain.handle('get-config', async () => {
+        const cfg = loadConfig();
+        
+        // setting.jsonが存在しない or ハードコードされたFFmpegパスが有効
+        if (!cfg || !cfg.ffmpegPath || !fs.existsSync(cfg.ffmpegPath)) {
+            return {
+                ffmpegPath: HARDCODED_FFMPEG_PATH,
+                fallback: true
+            };
+        }
+        
+        return cfg;
+    });
+}
+
+app.whenReady().then(createWindow);
+app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+});
+app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
