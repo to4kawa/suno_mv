@@ -89,4 +89,5 @@ window.onload = () => {
             alert("IPC通信エラー:\n\n" + e.message);
             logArea.textContent += "IPCエラー: " + e.message;
         }
+        logArea.scrollTop = logArea.scrollHeight; // ログエリアをスクロール
     };
