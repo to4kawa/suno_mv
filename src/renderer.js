@@ -24,6 +24,10 @@ window.onload = () => {
     };
 
     // 画像ドラッグ＆ドロップ
+    dropArea.ondragover = (e) => {
+    e.preventDefault();
+    dropArea.style.background = "#eef"; // 視覚フィードバック任意
+  };
     dropArea.ondrop = (e) => {
         e.preventDefault();
         dropArea.style.background = "";
