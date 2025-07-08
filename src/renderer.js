@@ -24,10 +24,6 @@ window.onload = () => {
     };
 
     // 画像ドラッグ＆ドロップ
-    dropArea.ondragover = (e) => {
-    e.preventDefault();
-    dropArea.style.background = "#eef"; // 視覚フィードバック任意
-  };
     dropArea.ondrop = (e) => {
         e.preventDefault();
         dropArea.style.background = "";
@@ -36,7 +32,7 @@ window.onload = () => {
             const reader = new FileReader();
             reader.onload = (event) => {
                 const base64 = event.target.result;
-                previewImg.src = base64; // 🔁 base64でプレビュー
+                previewImg.src = base64;
                 previewImg.setAttribute("data-cover-id", "custom");
                 previewImg.setAttribute("data-base64", base64);
                 previewImg.removeAttribute("data-file");
@@ -48,8 +44,6 @@ window.onload = () => {
     };
 
     // 動画生成
-    // ...（略）window.onload = () => { ... のなか
-
     generateBtn.onclick = async () => {
         const url = urlInput.value.trim();
         const m = url.match(/song\/([a-f0-9-]+)/);
@@ -58,12 +52,11 @@ window.onload = () => {
             return;
         }
 
-        // Suno画像プレビューか、カスタム画像（data-base64）がどちらか必須
-        const isSunoCover = previewImg.getAttribute("data-cover-id") && previewImg.getAttribute("data-cover-id") !== "custom";
+        const isSunoCover = previewImg.getAttribute("data-cover-id") !== "custom";
         const base64 = previewImg.getAttribute("data-base64");
 
-        if (!isSunoCover && (!base64 || !base64.startsWith('data:image'))) {
-            alert("画像をドロップするか、プレビュー画像を表示してください");
+        if (!isSunoCover && (!base64 || !base64.startsWith("data:image"))) {
+            alert("画像をドロップするか、SunoのURLを入力してください");
             return;
         }
 
@@ -72,12 +65,13 @@ window.onload = () => {
         try {
             let result;
             if (isSunoCover) {
-                // サーバ側で自動的にカバー画像を取得（base64送信不要）
+                // Suno画像を使う場合
                 result = await window.electronAPI.generateMP4WithSunoCover({ url });
             } else {
-                // カスタム画像
+                // カスタム画像を使う場合
                 result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
             }
+
             if (result.success) {
                 alert("✅ 完了！outputフォルダを確認してください");
                 logArea.textContent += result.stdout;
@@ -89,5 +83,7 @@ window.onload = () => {
             alert("IPC通信エラー:\n\n" + e.message);
             logArea.textContent += "IPCエラー: " + e.message;
         }
-        logArea.scrollTop = logArea.scrollHeight; // ログエリアをスクロール
+
+        logArea.scrollTop = logArea.scrollHeight;
     };
+};
