@@ -6,8 +6,8 @@
 ## ✨ Features
 
 - Paste any Suno song URL
-- Preview and replace cover image (drag & drop supported)
-- Choose output folder, resolution, and visualizer type
+- Preview and replace cover image (drag & drop or clipboard paste)
+- Choose output folder via the settings button, resolution, and visualizer type
 - Generates MP4 with FFmpeg
 
 ## 📦 Installation
