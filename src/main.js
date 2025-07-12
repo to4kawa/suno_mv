@@ -3,7 +3,31 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-const HARDCODED_FFMPEG_PATH = 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe';
+const configPath = path.join(__dirname, '../setting.json');
+let settings = { ffmpegPath: '', outputDir: '' };
+try {
+    settings = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+} catch (_) {
+    // ignore
+}
+
+function saveSettings() {
+    fs.writeFileSync(configPath, JSON.stringify(settings, null, 2));
+}
+
+const FFMPEG_PATH = settings.ffmpegPath || 'ffmpeg';
+
+ipcMain.handle('select-output-dir', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    if (!result.canceled && result.filePaths[0]) {
+        settings.outputDir = result.filePaths[0];
+        saveSettings();
+        return { success: true, outputDir: settings.outputDir };
+    }
+    return { success: false };
+});
+
+ipcMain.handle('get-output-dir', async () => settings.outputDir);
 
 // Sunoカバー画像 + MP3自動ダウンロード
 ipcMain.handle('generate-mp4-with-suno-cover', async (event, { url }) => {
@@ -11,23 +35,23 @@ ipcMain.handle('generate-mp4-with-suno-cover', async (event, { url }) => {
         const m = url.match(/song\/([a-f0-9-]+)/);
         if (!m) return { success: false, stderr: 'Suno曲のURLが無効です' };
         const id = m[1];
-        const appPath = app.getPath('userData');
-        if (!fs.existsSync(appPath)) fs.mkdirSync(appPath, { recursive: true });
+        const outputDir = settings.outputDir || app.getPath('userData');
+        if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
         // カバー画像
-        const tempImagePath = path.join(appPath, 'temp_cover.jpg');
+        const tempImagePath = path.join(outputDir, 'temp_cover.jpg');
         const imgRes = await fetch(`https://cdn2.suno.ai/image_large_${id}.jpeg`);
         const imgBuf = Buffer.from(await imgRes.arrayBuffer());
         fs.writeFileSync(tempImagePath, imgBuf);
 
         // MP3
-        const tempMp3Path = path.join(appPath, `${id}.mp3`);
+        const tempMp3Path = path.join(outputDir, `${id}.mp3`);
         if (!fs.existsSync(tempMp3Path)) {
             const mp3Res = await fetch(`https://cdn1.suno.ai/${id}.mp3`);
             const mp3Buf = Buffer.from(await mp3Res.arrayBuffer());
             fs.writeFileSync(tempMp3Path, mp3Buf);
         }
-        const outputVideoPath = path.join(appPath, `${id}.mp4`);
+        const outputVideoPath = path.join(outputDir, `${id}.mp4`);
         const ffmpegArgs = [
             '-loop', '1', '-i', tempImagePath,
             '-i', tempMp3Path,
@@ -38,7 +62,7 @@ ipcMain.handle('generate-mp4-with-suno-cover', async (event, { url }) => {
             outputVideoPath
         ];
 
-        const ffmpeg = spawn(HARDCODED_FFMPEG_PATH, ffmpegArgs);
+        const ffmpeg = spawn(FFMPEG_PATH, ffmpegArgs);
         let stdout = '', stderr = '';
         ffmpeg.stdout.on('data', data => stdout += data.toString());
         ffmpeg.stderr.on('data', data => stderr += data.toString());
@@ -60,11 +84,11 @@ ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
         const m = url.match(/song\/([a-f0-9-]+)/);
         if (!m) return { success: false, stderr: 'Suno曲のURLが無効です' };
         const id = m[1];
-        const appPath = app.getPath('userData');
-        if (!fs.existsSync(appPath)) fs.mkdirSync(appPath, { recursive: true });
+        const outputDir = settings.outputDir || app.getPath('userData');
+        if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
         // 画像保存
-        const tempImagePath = path.join(appPath, 'temp_cover.jpg');
+        const tempImagePath = path.join(outputDir, 'temp_cover.jpg');
         if (base64 && base64.startsWith('data:image')) {
             const base64Data = base64.split(',')[1];
             fs.writeFileSync(tempImagePath, Buffer.from(base64Data, 'base64'));
@@ -73,14 +97,14 @@ ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
         }
 
         // MP3
-        const tempMp3Path = path.join(appPath, `${id}.mp3`);
+        const tempMp3Path = path.join(outputDir, `${id}.mp3`);
         if (!fs.existsSync(tempMp3Path)) {
             const mp3Res = await fetch(`https://cdn1.suno.ai/${id}.mp3`);
             const mp3Buf = Buffer.from(await mp3Res.arrayBuffer());
             fs.writeFileSync(tempMp3Path, mp3Buf);
         }
 
-        const outputVideoPath = path.join(appPath, 'output.mp4');
+        const outputVideoPath = path.join(outputDir, `${id}.mp4`);
         const ffmpegArgs = [
             '-loop', '1', '-i', tempImagePath,
             '-i', tempMp3Path,
@@ -91,7 +115,7 @@ ipcMain.handle('generate-mp4-with-base64', async (event, { url, base64 }) => {
             outputVideoPath
         ];
 
-        const ffmpeg = spawn(HARDCODED_FFMPEG_PATH, ffmpegArgs);
+        const ffmpeg = spawn(FFMPEG_PATH, ffmpegArgs);
         let stdout = '', stderr = '';
         ffmpeg.stdout.on('data', data => stdout += data.toString());
         ffmpeg.stderr.on('data', data => stderr += data.toString());

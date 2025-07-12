@@ -6,6 +6,18 @@ window.onload = () => {
     const previewImg = document.getElementById("preview-img");
     const logArea = document.getElementById("log");
     const settingsBtn = document.getElementById("settings-btn");
+    const outputDirDisplay = document.getElementById("output-dir");
+
+    window.electronAPI.getOutputDir().then(dir => {
+        if (dir) outputDirDisplay.textContent = `Output: ${dir}`;
+    });
+
+    settingsBtn.onclick = async () => {
+        const res = await window.electronAPI.selectOutputDir();
+        if (res && res.success) {
+            outputDirDisplay.textContent = `Output: ${res.outputDir}`;
+        }
+    };
 
     // プレビュー
     previewBtn.onclick = () => {
@@ -42,6 +54,29 @@ window.onload = () => {
             alert("画像ファイルをドロップしてください");
         }
     };
+
+    window.addEventListener('paste', (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const base64 = event.target.result;
+                        previewImg.src = base64;
+                        previewImg.setAttribute('data-cover-id', 'custom');
+                        previewImg.setAttribute('data-base64', base64);
+                        previewImg.removeAttribute('data-file');
+                    };
+                    reader.readAsDataURL(file);
+                    e.preventDefault();
+                    break;
+                }
+            }
+        }
+    });
 
     // 動画生成
     generateBtn.onclick = async () => {
