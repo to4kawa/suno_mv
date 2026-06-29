@@ -2,7 +2,7 @@ use base64::Engine;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{path::PathBuf, process::Stdio, sync::Arc};
+use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tauri::{Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -134,14 +134,17 @@ async fn generate_mp4(
             }
         });
     }
-    let mut guard = state.ffmpeg.lock().await;
-    let status = guard
-        .as_mut()
-        .unwrap()
-        .wait()
-        .await
-        .map_err(|e| e.to_string())?;
-    *guard = None;
+    let status = loop {
+        {
+            let mut guard = state.ffmpeg.lock().await;
+            let child = guard.as_mut().ok_or("ffmpeg process handle is missing")?;
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                *guard = None;
+                break status;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
     if status.success() {
         Ok(output_path.to_string_lossy().to_string())
     } else {
@@ -158,7 +161,7 @@ async fn cancel_generate(state: tauri::State<'_, AppState>) -> Result<(), String
 }
 
 fn extract_id(url: &str) -> Option<String> {
-    Regex::new(r"(?i)(?:song|clip)/([0-9a-f-]{20,})")
+    Regex::new(r"(?i)/(?:song|clip|s)/([0-9a-f-]{20,})")
         .ok()?
         .captures(url)
         .and_then(|c| c.get(1))

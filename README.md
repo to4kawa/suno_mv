@@ -36,6 +36,9 @@ export SUNO_COOKIE='...'
 
 2. アプリ画面の `SUNO_COOKIE` 欄
 
+
+このプロジェクトは Electron / `npm start` 前提ではありません。開発・ビルドは Tauri CLI を使い、`cargo tauri dev` / `cargo tauri build` を実行してください。
+
 ## Development
 
 ```bash
