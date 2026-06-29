@@ -1,34 +1,49 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8" >
-    <title>Suno MV App</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; }
-        #drop-area {
-            width: 100%; height: 200px; border: 2px dashed #aaa;
-            display: flex; justify-content: center; align-items: center;
-            margin-bottom: 10px;
-        }
-        #preview-img {
-            max-width: 100%; max-height: 150px;
-            display: block; margin-top: 10px;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Suno MV Maker</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #10131a; color: #f6f7fb; }
+    main { max-width: 1100px; margin: auto; padding: 28px; }
+    .grid { display: grid; grid-template-columns: 1fr 360px; gap: 20px; }
+    section { background: #181d29; border: 1px solid #2a3143; border-radius: 16px; padding: 18px; }
+    label { display: block; margin: 14px 0 6px; color: #b7c0d8; }
+    input, select, textarea, button { box-sizing: border-box; width: 100%; border-radius: 10px; border: 1px solid #394155; background: #0f131d; color: #fff; padding: 10px; }
+    textarea { min-height: 70px; resize: vertical; }
+    button { cursor: pointer; background: #705cf6; border: none; font-weight: 700; margin-top: 12px; }
+    button.secondary { background: #2d3548; } button.danger { background: #b83252; }
+    #drop-area { min-height: 130px; border: 2px dashed #4c5874; display: grid; place-items: center; text-align: center; border-radius: 14px; margin-top: 12px; }
+    #preview-img { width: 100%; max-height: 360px; object-fit: contain; border-radius: 12px; background: #0b0e14; }
+    pre { height: 230px; overflow: auto; white-space: pre-wrap; background: #080b10; border-radius: 12px; padding: 12px; color: #cce1ff; }
+    .meta { font-size: 0.9rem; color: #ccd3e8; word-break: break-all; }
+  </style>
 </head>
 <body>
-    <h1>Suno MV Maker</h1>
-    
-    <button id="settings-btn">設定</button>
-
-    <input id="url-input" type="text" placeholder="Paste Suno URL here" style="width: 100%;" >
-    <button id="preview-btn">Preview</button>
-    <button id="generate-btn">Generate MP4</button>
-
-    <div id="drop-area">Drag and drop cover image here</div>
-    <img id="preview-img" src="" alt="Cover Preview" >
-    <pre id="log"></pre>
-
-    <script src="../src/renderer.js"></script>
+<main>
+  <h1>Suno MV Maker</h1>
+  <p>Suno URLからclip_idを抽出し、Cookie付きmetadata取得でaudio_url/image_urlを解決してFFmpegでMP4を書き出します。</p>
+  <div class="grid">
+    <section>
+      <label for="url-input">Suno URL</label><input id="url-input" placeholder="https://suno.com/song/...">
+      <label for="cookie-input">SUNO_COOKIE（任意・未入力なら環境変数を使用）</label><textarea id="cookie-input" placeholder="Cookieヘッダー値"></textarea>
+      <button id="fetch-btn">メタ情報取得 / プレビュー</button>
+      <div class="meta" id="meta"></div>
+      <label for="resolution">解像度</label><select id="resolution"><option>1280x720</option><option>1920x1080</option><option>1080x1080</option><option>3840x2160</option></select>
+      <label for="visualizer">Visualizer</label><select id="visualizer"><option value="spectrum">Spectrum</option><option value="waveform">Waveform</option></select>
+      <label for="output-dir">出力ディレクトリ（任意）</label><input id="output-dir" placeholder="空ならアプリデータディレクトリ">
+      <button id="generate-btn">MP4生成</button><button class="danger" id="cancel-btn">キャンセル</button>
+      <h3>ログ</h3><pre id="log"></pre>
+    </section>
+    <section>
+      <h2>カバー画像</h2><img id="preview-img" alt="Cover Preview">
+      <div id="drop-area">画像をドラッグ＆ドロップして差し替え</div>
+      <input id="file-input" type="file" accept="image/*">
+    </section>
+  </div>
+</main>
+<script type="module" src="../src/renderer.js"></script>
 </body>
 </html>

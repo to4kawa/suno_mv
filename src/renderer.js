@@ -1,88 +1,50 @@
-window.onload = () => {
-    const urlInput = document.getElementById("url-input");
-    const previewBtn = document.getElementById("preview-btn");
-    const generateBtn = document.getElementById("generate-btn");
-    const dropArea = document.getElementById("drop-area");
-    const previewImg = document.getElementById("preview-img");
-    const logArea = document.getElementById("log");
-    const settingsBtn = document.getElementById("settings-btn");
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
-    // プレビュー
-    previewBtn.onclick = () => {
-        const url = urlInput.value.trim();
-        const m = url.match(/song\/([a-f0-9-]+)/);
-        if (m) {
-            const id = m[1];
-            previewImg.src = `https://cdn2.suno.ai/image_large_${id}.jpeg`;
-            previewImg.setAttribute("data-cover-id", id);
-            previewImg.removeAttribute("data-file");
-            previewImg.removeAttribute("data-base64");
-        } else {
-            previewImg.src = "";
-            alert("Suno曲のURLを正しく入力してください");
-        }
-    };
+const $ = (id) => document.getElementById(id);
+const log = (line) => { $('log').textContent += `${line}\n`; $('log').scrollTop = $('log').scrollHeight; };
+let currentClip = null;
+let customImage = null;
 
-    // 画像ドラッグ＆ドロップ
-    dropArea.ondrop = (e) => {
-        e.preventDefault();
-        dropArea.style.background = "";
-        const file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith("image/")) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const base64 = event.target.result;
-                previewImg.src = base64;
-                previewImg.setAttribute("data-cover-id", "custom");
-                previewImg.setAttribute("data-base64", base64);
-                previewImg.removeAttribute("data-file");
-            };
-            reader.readAsDataURL(file);
-        } else {
-            alert("画像ファイルをドロップしてください");
-        }
-    };
+listen('mv-log', (event) => log(event.payload));
 
-    // 動画生成
-    generateBtn.onclick = async () => {
-        const url = urlInput.value.trim();
-        const m = url.match(/song\/([a-f0-9-]+)/);
-        if (!m) {
-            alert("Suno曲のURLを正しく入力してください");
-            return;
-        }
+async function readImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
-        const isSunoCover = previewImg.getAttribute("data-cover-id") !== "custom";
-        const base64 = previewImg.getAttribute("data-base64");
+async function setCustomImage(file) {
+  if (!file?.type?.startsWith('image/')) return alert('画像ファイルを選択してください');
+  customImage = await readImage(file);
+  $('preview-img').src = customImage;
+}
 
-        if (!isSunoCover && (!base64 || !base64.startsWith('data:image'))) {
-            alert("画像をドロップするか、プレビュー画像を選択してください");
-            return;
-        }
+$('file-input').addEventListener('change', (e) => setCustomImage(e.target.files[0]));
+$('drop-area').addEventListener('dragover', (e) => { e.preventDefault(); });
+$('drop-area').addEventListener('drop', (e) => { e.preventDefault(); setCustomImage(e.dataTransfer.files[0]); });
 
-        logArea.textContent = "動画生成中…\n";
+$('fetch-btn').addEventListener('click', async () => {
+  $('log').textContent = '';
+  customImage = null;
+  try {
+    currentClip = await invoke('fetch_clip', { req: { url: $('url-input').value.trim(), cookie: $('cookie-input').value.trim() || null } });
+    $('preview-img').src = currentClip.image_url || '';
+    $('meta').innerHTML = `<p><b>clip_id:</b> ${currentClip.clip_id}</p><p><b>title:</b> ${currentClip.title || '(untitled)'}</p><p><b>audio_url:</b> ${currentClip.audio_url || '(missing)'}</p><p><b>image_url:</b> ${currentClip.image_url || '(missing)'}</p>`;
+    log('metadata fetched');
+  } catch (e) { log(`ERROR: ${e}`); alert(e); }
+});
 
-        try {
-            let result;
-            if (isSunoCover) {
-                // ✅ ハンドラ名を統一
-                result = await window.electronAPI.generateMP4WithSunoCover({ url });
-            } else {
-                result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
-            }
+$('generate-btn').addEventListener('click', async () => {
+  $('log').textContent = '';
+  try {
+    const path = await invoke('generate_mp4', { req: { url: $('url-input').value.trim(), cookie: $('cookie-input').value.trim() || null, image_data_url: customImage, resolution: $('resolution').value, visualizer: $('visualizer').value, output_dir: $('output-dir').value.trim() || null } });
+    log(`完了: ${path}`);
+    alert(`完了: ${path}`);
+  } catch (e) { log(`ERROR: ${e}`); alert(e); }
+});
 
-            if (result.success) {
-                alert("✅ 完了！outputフォルダを確認してください");
-                logArea.textContent += result.stdout;
-            } else {
-                alert("動画生成中にエラーが発生しました\n\n" + (result.stderr || "詳細不明"));
-                logArea.textContent += (result.stderr || "") + "\n" + (result.stdout || "");
-            }
-        } catch (e) {
-            alert("IPC通信エラー:\n\n" + e.message);
-            logArea.textContent += "IPCエラー: " + e.message;
-        }
-
-        logArea.scrollTop = logArea.scrollHeight;
-    };
-};
+$('cancel-btn').addEventListener('click', async () => { await invoke('cancel_generate'); log('キャンセル要求を送信しました'); });

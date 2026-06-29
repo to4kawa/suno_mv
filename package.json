@@ -1,11 +1,12 @@
 {
-  "name": "suno-mv-app",
-  "version": "1.0.0",
-  "main": "src/main.js",
+  "name": "suno-mv-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "electron ."
-  },
-  "devDependencies": {
-    "electron": "^28.1.3"
+    "start": "cargo tauri dev",
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml"
   }
 }
