@@ -1,5 +1,23 @@
-
+# Dependencies and local app data
 node_modules
 output
 config.json
 .DS_Store
+
+# Rust / Tauri build output
+src-tauri/target/
+target/
+src-tauri/gen/
+
+# Frontend / packaged distribution output
+dist/
+build/
+
+# Installer / desktop app artifacts
+*.exe
+*.msi
+*.dmg
+*.app
+*.deb
+*.rpm
+*.AppImage
