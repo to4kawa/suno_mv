@@ -1,3 +1,11 @@
+const invoke = async (command, args) => {
+    const tauriInvoke = window.__TAURI__?.core?.invoke;
+    if (!tauriInvoke) {
+        throw new Error("Tauri IPC is not available. Start the app with `npm start` or `npm run dev`.");
+    }
+    return tauriInvoke(command, args);
+};
+
 window.onload = () => {
     const urlInput = document.getElementById("url-input");
     const previewBtn = document.getElementById("preview-btn");
@@ -5,9 +13,7 @@ window.onload = () => {
     const dropArea = document.getElementById("drop-area");
     const previewImg = document.getElementById("preview-img");
     const logArea = document.getElementById("log");
-    const settingsBtn = document.getElementById("settings-btn");
 
-    // プレビュー
     previewBtn.onclick = () => {
         const url = urlInput.value.trim();
         const m = url.match(/song\/([a-f0-9-]+)/);
@@ -15,7 +21,6 @@ window.onload = () => {
             const id = m[1];
             previewImg.src = `https://cdn2.suno.ai/image_large_${id}.jpeg`;
             previewImg.setAttribute("data-cover-id", id);
-            previewImg.removeAttribute("data-file");
             previewImg.removeAttribute("data-base64");
         } else {
             previewImg.src = "";
@@ -23,7 +28,15 @@ window.onload = () => {
         }
     };
 
-    // 画像ドラッグ＆ドロップ
+    dropArea.ondragover = (e) => {
+        e.preventDefault();
+        dropArea.style.background = "#f5f5f5";
+    };
+
+    dropArea.ondragleave = () => {
+        dropArea.style.background = "";
+    };
+
     dropArea.ondrop = (e) => {
         e.preventDefault();
         dropArea.style.background = "";
@@ -35,7 +48,6 @@ window.onload = () => {
                 previewImg.src = base64;
                 previewImg.setAttribute("data-cover-id", "custom");
                 previewImg.setAttribute("data-base64", base64);
-                previewImg.removeAttribute("data-file");
             };
             reader.readAsDataURL(file);
         } else {
@@ -43,7 +55,6 @@ window.onload = () => {
         }
     };
 
-    // 動画生成
     generateBtn.onclick = async () => {
         const url = urlInput.value.trim();
         const m = url.match(/song\/([a-f0-9-]+)/);
@@ -54,26 +65,25 @@ window.onload = () => {
 
         const isSunoCover = previewImg.getAttribute("data-cover-id") !== "custom";
         const base64 = previewImg.getAttribute("data-base64");
-
-        if (!isSunoCover && (!base64 || !base64.startsWith('data:image'))) {
+        if (!isSunoCover && (!base64 || !base64.startsWith("data:image"))) {
             alert("画像をドロップするか、プレビュー画像を選択してください");
             return;
         }
 
         logArea.textContent = "動画生成中…\n";
-
         try {
-            let result;
-            if (isSunoCover) {
-                // ✅ ハンドラ名を統一
-                result = await window.electronAPI.generateMP4WithSunoCover({ url });
-            } else {
-                result = await window.electronAPI.generateMP4WithBase64({ url, base64 });
-            }
+            const result = await invoke("generate_mp4", {
+                request: {
+                    url,
+                    base64: isSunoCover ? null : base64,
+                    resolution: "1280x720",
+                    visualizer: "combined"
+                }
+            });
 
             if (result.success) {
-                alert("✅ 完了！outputフォルダを確認してください");
-                logArea.textContent += result.stdout;
+                alert(`✅ 完了！出力先: ${result.outputPath || "output"}`);
+                logArea.textContent += result.stdout || result.stderr || "完了しました";
             } else {
                 alert("動画生成中にエラーが発生しました\n\n" + (result.stderr || "詳細不明"));
                 logArea.textContent += (result.stderr || "") + "\n" + (result.stdout || "");
