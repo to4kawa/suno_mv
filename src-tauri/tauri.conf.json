@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Suno MV Maker",
+  "version": "0.1.0",
+  "identifier": "com.example.suno-mv",
+  "build": {
+    "frontendDist": "../public",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev:web"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Suno MV Maker",
+        "width": 1080,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

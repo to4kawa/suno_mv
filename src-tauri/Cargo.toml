@@ -1,0 +1,12 @@
+[package]
+name = "suno-mv-tauri"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "suno_mv_tauri_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "suno-mv-tauri"
+path = "src/main.rs"

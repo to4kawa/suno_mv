@@ -1,11 +1,12 @@
 {
   "name": "suno-mv-app",
   "version": "1.0.0",
-  "main": "src/main.js",
+  "private": true,
+  "type": "commonjs",
   "scripts": {
-    "start": "electron ."
-  },
-  "devDependencies": {
-    "electron": "^28.1.3"
+    "dev:web": "python3 -m http.server 1420 --directory public",
+    "tauri": "tauri",
+    "start": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "test": "node --test"
   }
 }
