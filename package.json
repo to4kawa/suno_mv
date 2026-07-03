@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node test/suno_mv.test.js"
   },
   "devDependencies": {
     "electron": "^28.1.3"

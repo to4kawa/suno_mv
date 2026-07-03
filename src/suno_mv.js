@@ -20,12 +20,49 @@ function download(url, dest) {
         });
     });
 }
+
 function extractSunoId(url) {
     const m = url.match(/song\/([a-f0-9-]+)/);
     return m ? m[1] : null;
 }
 
-async function main() {
+function sanitizeSunoId(songId) {
+    return songId.replace(/[^a-zA-Z0-9-_]/g, "");
+}
+
+function buildAssetUrls(songId) {
+    const safeId = sanitizeSunoId(songId);
+    return {
+        safeId,
+        mp3Url: `https://cdn1.suno.ai/${safeId}.mp3`,
+        defaultImageUrl: `https://cdn2.suno.ai/image_large_${safeId}.jpeg`,
+    };
+}
+
+function buildOutputPaths(outputPath, safeId) {
+    return {
+        mp3Path: path.join(outputPath, `${safeId}.mp3`),
+        imgPath: path.join(outputPath, `${safeId}.jpeg`),
+        mp4Path: path.join(outputPath, `${safeId}.mp4`),
+    };
+}
+
+function buildFfmpegCommand({ mp3Path, imgPath, mp4Path, resolution, visualizer }) {
+    return [
+        'ffmpeg', '-y',
+        '-i', `"${mp3Path}"`,
+        '-loop', '1',
+        '-i', `"${imgPath}"`,
+        '-filter_complex',
+        `"[0:a]showspectrum=s=${resolution}:mode=${visualizer}[spec];[1:v][spec]overlay=format=auto"`,
+        '-shortest',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        `"${mp4Path}"`
+    ].join(' ');
+}
+
+async function main(argv = process.argv) {
     const [
         ,,
         inputUrl,
@@ -33,21 +70,17 @@ async function main() {
         resolution = "1280x720",
         visualizer = "spectrum",
         imagePathOverride
-    ] = process.argv;
+    ] = argv;
 
-    if (!inputUrl || !extractSunoId(inputUrl)) {
+    const songId = inputUrl ? extractSunoId(inputUrl) : null;
+    if (!inputUrl || !songId) {
         console.error("Usage: node suno_mv.js <Suno Song URL>");
         process.exit(1);
     }
 
-    const songId = extractSunoId(inputUrl);
     if (!fs.existsSync(outputPath)) fs.mkdirSync(outputPath, { recursive: true });
-    const safeId = songId.replace(/[^a-zA-Z0-9-_]/g, "");
-    const mp3Url = `https://cdn1.suno.ai/${safeId}.mp3`;
-    const defaultImageUrl = `https://cdn2.suno.ai/image_large_${safeId}.jpeg`;
-    const mp3Path = path.join(outputPath, `${safeId}.mp3`);
-    const imgPath = path.join(outputPath, `${safeId}.jpeg`);
-    const mp4Path = path.join(outputPath, `${safeId}.mp4`);
+    const { safeId, mp3Url, defaultImageUrl } = buildAssetUrls(songId);
+    const { mp3Path, imgPath, mp4Path } = buildOutputPaths(outputPath, safeId);
 
     try {
         console.log("Downloading audio...");
@@ -73,18 +106,8 @@ async function main() {
             process.exit(4);
         }
     }
-    const ffmpegCmd = [
-        'ffmpeg', '-y',
-        '-i', `"${mp3Path}"`,
-        '-loop', '1',
-        '-i', `"${imgPath}"`,
-        '-filter_complex',
-        `"[0:a]showspectrum=s=${resolution}:mode=${visualizer}[spec];[1:v][spec]overlay=format=auto"`,
-        '-shortest',
-        '-c:v', 'libx264',
-        '-c:a', 'aac',
-        `"${mp4Path}"`
-    ].join(' ');
+
+    const ffmpegCmd = buildFfmpegCommand({ mp3Path, imgPath, mp4Path, resolution, visualizer });
 
     console.log("Generating video with FFmpeg...");
     exec(ffmpegCmd, (err, stdout, stderr) => {
@@ -95,4 +118,17 @@ async function main() {
         console.log(`✅ Done! Output saved to: ${mp4Path}`);
     });
 }
-main();
+
+if (require.main === module) {
+    main();
+}
+
+module.exports = {
+    download,
+    extractSunoId,
+    sanitizeSunoId,
+    buildAssetUrls,
+    buildOutputPaths,
+    buildFfmpegCommand,
+    main,
+};
