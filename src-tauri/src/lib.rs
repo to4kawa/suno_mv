@@ -10,6 +10,31 @@ use tauri::{AppHandle, Manager};
 
 const ALLOWED_RESOLUTIONS: &[&str] = &["1280x720", "1920x1080", "1080x1080"];
 const ALLOWED_VISUALIZERS: &[&str] = &["combined", "separate", "single"];
+const ALLOWED_ENCODER_PRESETS: &[&str] = &["cpu_x264", "amd_amf"];
+const ALLOWED_QUALITIES: &[&str] = &["standard", "high"];
+const SETTINGS_FILE_NAME: &str = "settings.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppSettings {
+    pub save_folder: String,
+    pub ffmpeg_auto_detect: bool,
+    pub ffmpeg_path: String,
+    pub encoder_preset: String,
+    pub quality: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            save_folder: String::new(),
+            ffmpeg_auto_detect: true,
+            ffmpeg_path: String::new(),
+            encoder_preset: "cpu_x264".to_string(),
+            quality: "standard".to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +44,10 @@ pub struct GenerateRequest {
     pub resolution: Option<String>,
     pub visualizer: Option<String>,
     pub output_dir: Option<String>,
+    pub ffmpeg_auto_detect: Option<bool>,
+    pub ffmpeg_path: Option<String>,
+    pub encoder_preset: Option<String>,
+    pub quality: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -28,6 +57,16 @@ pub struct GenerateResponse {
     pub stdout: String,
     pub stderr: String,
     pub output_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegTestResponse {
+    pub success: bool,
+    pub status: String,
+    pub version: Option<String>,
+    pub path: Option<String>,
+    pub details: String,
 }
 
 pub fn extract_suno_id(url: &str) -> Option<String> {
@@ -63,7 +102,13 @@ fn safe_id(id: &str) -> String {
 }
 
 fn download_to_file(url: &str, path: &Path) -> Result<(), String> {
-    let response = ureq::get(url).call().map_err(|err| err.to_string())?;
+    let response = ureq::get(url).call().map_err(|err| match err {
+        ureq::Error::Status(code, response) => format!(
+            "Download failed for {url}: HTTP {code} {}",
+            response.status_text()
+        ),
+        other => format!("Download failed for {url}: {other}"),
+    })?;
     let mut reader = response.into_reader();
     let mut file = fs::File::create(path).map_err(|err| err.to_string())?;
     std::io::copy(&mut reader, &mut file).map_err(|err| err.to_string())?;
@@ -89,8 +134,10 @@ pub fn build_ffmpeg_args(
     output_path: &Path,
     resolution: &str,
     visualizer: &str,
+    encoder_preset: &str,
+    quality: &str,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "-y".into(),
         "-i".into(),
         mp3_path.to_string_lossy().into_owned(),
@@ -101,31 +148,149 @@ pub fn build_ffmpeg_args(
         "-filter_complex".into(),
         format!("[0:a]showspectrum=s={resolution}:mode={visualizer}[spec];[1:v][spec]overlay=format=auto"),
         "-shortest".into(),
-        "-c:v".into(),
-        "libx264".into(),
-        "-pix_fmt".into(),
-        "yuv420p".into(),
+    ];
+
+    match encoder_preset {
+        "amd_amf" => {
+            args.extend([
+                "-c:v".into(),
+                "h264_amf".into(),
+                "-quality".into(),
+                if quality == "high" {
+                    "quality"
+                } else {
+                    "balanced"
+                }
+                .into(),
+                "-usage".into(),
+                if quality == "high" {
+                    "quality"
+                } else {
+                    "transcoding"
+                }
+                .into(),
+            ]);
+        }
+        _ => {
+            args.extend([
+                "-c:v".into(),
+                "libx264".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+            ]);
+            if quality == "high" {
+                args.extend(["-crf".into(), "18".into(), "-preset".into(), "slow".into()]);
+            }
+        }
+    }
+
+    args.extend([
         "-c:a".into(),
         "aac".into(),
         "-movflags".into(),
         "+faststart".into(),
         output_path.to_string_lossy().into_owned(),
-    ]
+    ]);
+    args
 }
 
 #[derive(Debug)]
 struct FfmpegCandidate {
-    label: &'static str,
+    label: String,
     path: PathBuf,
 }
 
-fn ffmpeg_candidates() -> Vec<FfmpegCandidate> {
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?
+        .join(SETTINGS_FILE_NAME))
+}
+
+fn default_output_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?
+        .join("output"))
+}
+
+fn read_settings(app: &AppHandle) -> Result<AppSettings, String> {
+    let path = settings_path(app)?;
+    if !path.is_file() {
+        return Ok(AppSettings::default());
+    }
+    let text = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let mut settings: AppSettings = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    if !ALLOWED_ENCODER_PRESETS.contains(&settings.encoder_preset.as_str()) {
+        settings.encoder_preset = AppSettings::default().encoder_preset;
+    }
+    if !ALLOWED_QUALITIES.contains(&settings.quality.as_str()) {
+        settings.quality = AppSettings::default().quality;
+    }
+    Ok(settings)
+}
+
+fn write_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
+    ensure_allowed(
+        &settings.encoder_preset,
+        ALLOWED_ENCODER_PRESETS,
+        "encoder preset",
+    )?;
+    ensure_allowed(&settings.quality, ALLOWED_QUALITIES, "quality")?;
+    let path = settings_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
+    fs::write(path, text).map_err(|err| err.to_string())
+}
+
+fn auto_detect_ffmpeg_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-Command ffmpeg -ErrorAction SilentlyContinue).Source",
+            ])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
+            }
+        }
+    }
+    None
+}
+
+fn ffmpeg_candidates(settings: &AppSettings) -> Vec<FfmpegCandidate> {
     let mut candidates = Vec::new();
+
+    if !settings.ffmpeg_auto_detect && !settings.ffmpeg_path.trim().is_empty() {
+        candidates.push(FfmpegCandidate {
+            label: "user-configured FFmpeg path".to_string(),
+            path: PathBuf::from(settings.ffmpeg_path.trim()),
+        });
+    }
+
+    if settings.ffmpeg_auto_detect {
+        if let Some(path) = auto_detect_ffmpeg_path() {
+            candidates.push(FfmpegCandidate {
+                label: "auto-detected FFmpeg path".to_string(),
+                path,
+            });
+        }
+    }
 
     if let Ok(path) = env::var("SUNO_MV_FFMPEG_PATH") {
         if !path.trim().is_empty() {
             candidates.push(FfmpegCandidate {
-                label: "SUNO_MV_FFMPEG_PATH",
+                label: "SUNO_MV_FFMPEG_PATH".to_string(),
                 path: PathBuf::from(path),
             });
         }
@@ -140,21 +305,24 @@ fn ffmpeg_candidates() -> Vec<FfmpegCandidate> {
         .join("ffmpeg.exe");
     if project_local.is_file() {
         candidates.push(FfmpegCandidate {
-            label: "project-local tools/ffmpeg/bin/ffmpeg.exe",
+            label: "project-local tools/ffmpeg/bin/ffmpeg.exe".to_string(),
             path: project_local,
         });
     }
 
     candidates.push(FfmpegCandidate {
-        label: "ffmpeg from PATH",
+        label: "ffmpeg from PATH".to_string(),
         path: PathBuf::from("ffmpeg"),
     });
 
     candidates
 }
 
-pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
-    let candidates = ffmpeg_candidates();
+fn run_ffmpeg_with_settings(
+    args: &[String],
+    settings: &AppSettings,
+) -> Result<(String, String), String> {
+    let candidates = ffmpeg_candidates(settings);
     let mut tried = Vec::new();
 
     for candidate in &candidates {
@@ -166,7 +334,13 @@ pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
                 return if output.status.success() {
                     Ok((stdout, stderr))
                 } else {
-                    Err(stderr)
+                    Err(format!(
+                        "{} ({}) exited with status {}: {}",
+                        candidate.label,
+                        candidate.path.display(),
+                        output.status,
+                        stderr
+                    ))
                 };
             }
             Err(err) => tried.push(format!(
@@ -182,6 +356,103 @@ pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
         "FFmpeg executable was not found or could not be started. Tried: {}",
         tried.join("; ")
     ))
+}
+
+pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
+    run_ffmpeg_with_settings(args, &AppSettings::default())
+}
+
+#[tauri::command]
+fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
+    read_settings(&app)
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+    write_settings(&app, &settings)
+}
+
+#[tauri::command]
+fn detect_ffmpeg(app: AppHandle) -> FfmpegTestResponse {
+    let mut settings = read_settings(&app).unwrap_or_default();
+    settings.ffmpeg_auto_detect = true;
+    let args = vec!["-version".to_string()];
+    test_ffmpeg_inner(&settings, &args)
+}
+
+#[tauri::command]
+fn test_ffmpeg(app: AppHandle, settings: AppSettings) -> FfmpegTestResponse {
+    let _ = write_settings(&app, &settings);
+    let args = vec!["-version".to_string()];
+    test_ffmpeg_inner(&settings, &args)
+}
+
+fn test_ffmpeg_inner(settings: &AppSettings, args: &[String]) -> FfmpegTestResponse {
+    let candidates = ffmpeg_candidates(settings);
+    let mut tried = Vec::new();
+
+    for candidate in &candidates {
+        match Command::new(&candidate.path).args(args).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let version = stdout.lines().next().map(|line| line.to_string());
+                if output.status.success() {
+                    return FfmpegTestResponse {
+                        success: true,
+                        status: "OK".to_string(),
+                        version,
+                        path: Some(candidate.path.to_string_lossy().into_owned()),
+                        details: format!("{} ({})", candidate.label, candidate.path.display()),
+                    };
+                }
+                tried.push(format!(
+                    "{} ({}): exited with status {}: {}",
+                    candidate.label,
+                    candidate.path.display(),
+                    output.status,
+                    stderr
+                ));
+            }
+            Err(err) => tried.push(format!(
+                "{} ({}): {}",
+                candidate.label,
+                candidate.path.display(),
+                err
+            )),
+        }
+    }
+
+    FfmpegTestResponse {
+        success: false,
+        status: "Not found".to_string(),
+        version: None,
+        path: None,
+        details: format!("Tried: {}", tried.join("; ")),
+    }
+}
+
+#[tauri::command]
+fn open_output_folder(app: AppHandle, save_folder: Option<String>) -> Result<String, String> {
+    let output_dir = match save_folder {
+        Some(folder) if !folder.trim().is_empty() => PathBuf::from(folder),
+        _ => default_output_dir(&app)?,
+    };
+    fs::create_dir_all(&output_dir).map_err(|err| err.to_string())?;
+
+    #[cfg(windows)]
+    Command::new("explorer")
+        .arg(&output_dir)
+        .spawn()
+        .map_err(|err| err.to_string())?;
+
+    #[cfg(not(windows))]
+    Command::new("xdg-open")
+        .arg(&output_dir)
+        .spawn()
+        .map_err(|err| err.to_string())?;
+
+    Ok(output_dir.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -205,16 +476,23 @@ fn generate_mp4_inner(
         safe_id(&extract_suno_id(&request.url).ok_or_else(|| "Suno曲のURLが無効です".to_string())?);
     let resolution = request.resolution.unwrap_or_else(|| "1280x720".to_string());
     let visualizer = request.visualizer.unwrap_or_else(|| "combined".to_string());
+    let saved_settings = read_settings(&app).unwrap_or_default();
+    let ffmpeg_auto_detect = request
+        .ffmpeg_auto_detect
+        .unwrap_or(saved_settings.ffmpeg_auto_detect);
+    let ffmpeg_path = request.ffmpeg_path.unwrap_or(saved_settings.ffmpeg_path);
+    let encoder_preset = request
+        .encoder_preset
+        .unwrap_or(saved_settings.encoder_preset);
+    let quality = request.quality.unwrap_or(saved_settings.quality);
     ensure_allowed(&resolution, ALLOWED_RESOLUTIONS, "resolution")?;
     ensure_allowed(&visualizer, ALLOWED_VISUALIZERS, "visualizer")?;
+    ensure_allowed(&encoder_preset, ALLOWED_ENCODER_PRESETS, "encoder preset")?;
+    ensure_allowed(&quality, ALLOWED_QUALITIES, "quality")?;
 
     let base_dir = match request.output_dir {
-        Some(output_dir) => PathBuf::from(output_dir),
-        None => app
-            .path()
-            .app_data_dir()
-            .map_err(|err| err.to_string())?
-            .join("output"),
+        Some(output_dir) if !output_dir.trim().is_empty() => PathBuf::from(output_dir),
+        _ => default_output_dir(&app)?,
     };
     fs::create_dir_all(&base_dir).map_err(|err| err.to_string())?;
 
@@ -238,8 +516,17 @@ fn generate_mp4_inner(
         &output_path,
         &resolution,
         &visualizer,
+        &encoder_preset,
+        &quality,
     );
-    match run_ffmpeg(&args) {
+    let ffmpeg_settings = AppSettings {
+        save_folder: base_dir.to_string_lossy().into_owned(),
+        ffmpeg_auto_detect,
+        ffmpeg_path,
+        encoder_preset,
+        quality,
+    };
+    match run_ffmpeg_with_settings(&args, &ffmpeg_settings) {
         Ok((stdout, stderr)) => Ok(GenerateResponse {
             success: true,
             stdout,
@@ -252,7 +539,14 @@ fn generate_mp4_inner(
 
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![generate_mp4])
+        .invoke_handler(tauri::generate_handler![
+            generate_mp4,
+            load_settings,
+            save_settings,
+            detect_ffmpeg,
+            test_ffmpeg,
+            open_output_folder
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
 }
@@ -286,6 +580,8 @@ mod tests {
             Path::new("/tmp/out file.mp4"),
             "1280x720",
             "combined",
+            "cpu_x264",
+            "standard",
         );
         assert!(args.contains(&"/tmp/audio file.mp3".to_string()));
         assert!(args.contains(&"/tmp/cover image.jpeg".to_string()));
@@ -296,7 +592,7 @@ mod tests {
 
     #[test]
     fn includes_path_ffmpeg_candidate() {
-        let candidates = ffmpeg_candidates();
+        let candidates = ffmpeg_candidates(&AppSettings::default());
         assert!(candidates.iter().any(|candidate| {
             candidate.label == "ffmpeg from PATH" && candidate.path == PathBuf::from("ffmpeg")
         }));
@@ -307,7 +603,11 @@ mod tests {
         let previous = env::var("SUNO_MV_FFMPEG_PATH").ok();
         env::set_var("SUNO_MV_FFMPEG_PATH", "C:\\ffmpeg\\bin\\ffmpeg.exe");
 
-        let candidates = ffmpeg_candidates();
+        let settings = AppSettings {
+            ffmpeg_auto_detect: false,
+            ..AppSettings::default()
+        };
+        let candidates = ffmpeg_candidates(&settings);
 
         match previous {
             Some(value) => env::set_var("SUNO_MV_FFMPEG_PATH", value),
@@ -317,5 +617,36 @@ mod tests {
         let first = candidates.first().expect("expected ffmpeg candidates");
         assert_eq!(first.label, "SUNO_MV_FFMPEG_PATH");
         assert_eq!(first.path, PathBuf::from("C:\\ffmpeg\\bin\\ffmpeg.exe"));
+    }
+
+    #[test]
+    fn prefers_user_configured_ffmpeg_candidate() {
+        let settings = AppSettings {
+            ffmpeg_auto_detect: false,
+            ffmpeg_path: "D:\\tools\\ffmpeg.exe".to_string(),
+            ..AppSettings::default()
+        };
+
+        let candidates = ffmpeg_candidates(&settings);
+
+        let first = candidates.first().expect("expected ffmpeg candidates");
+        assert_eq!(first.label, "user-configured FFmpeg path");
+        assert_eq!(first.path, PathBuf::from("D:\\tools\\ffmpeg.exe"));
+    }
+
+    #[test]
+    fn builds_amd_amf_args_without_cpu_fallback() {
+        let args = build_ffmpeg_args(
+            Path::new("/tmp/audio.mp3"),
+            Path::new("/tmp/cover.jpeg"),
+            Path::new("/tmp/out.mp4"),
+            "1280x720",
+            "combined",
+            "amd_amf",
+            "standard",
+        );
+
+        assert!(args.windows(2).any(|pair| pair == ["-c:v", "h264_amf"]));
+        assert!(!args.iter().any(|arg| arg == "libx264"));
     }
 }
