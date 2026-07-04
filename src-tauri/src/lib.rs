@@ -163,12 +163,7 @@ pub fn build_ffmpeg_args(
                 }
                 .into(),
                 "-usage".into(),
-                if quality == "high" {
-                    "quality"
-                } else {
-                    "transcoding"
-                }
-                .into(),
+                "transcoding".into(),
             ]);
         }
         _ => {
@@ -648,5 +643,22 @@ mod tests {
 
         assert!(args.windows(2).any(|pair| pair == ["-c:v", "h264_amf"]));
         assert!(!args.iter().any(|arg| arg == "libx264"));
+    }
+
+    #[test]
+    fn builds_amd_amf_high_with_transcoding_usage() {
+        let args = build_ffmpeg_args(
+            Path::new("/tmp/audio.mp3"),
+            Path::new("/tmp/cover.jpeg"),
+            Path::new("/tmp/out.mp4"),
+            "1280x720",
+            "combined",
+            "amd_amf",
+            "high",
+        );
+
+        assert!(args.windows(2).any(|pair| pair == ["-usage", "transcoding"]));
+        assert!(args.windows(2).any(|pair| pair == ["-quality", "quality"]));
+        assert!(!args.windows(2).any(|pair| pair == ["-usage", "quality"]));
     }
 }

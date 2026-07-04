@@ -62,7 +62,7 @@ window.onload = () => {
 
     const setFfmpegStatus = (result) => {
         if (result.success) {
-            ffmpegStatus.textContent = `Status: OK\n${result.version || "FFmpeg found"}\n${result.path || ""}`;
+            ffmpegStatus.textContent = `Status: OK\n${result.version || "FFmpeg found"}`;
         } else {
             ffmpegStatus.textContent = `Status: ${result.status || "Not found"}\n${result.details || "FFmpeg was not found."}`;
         }
