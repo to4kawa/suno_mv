@@ -94,6 +94,7 @@ pub struct SunoMetadata {
     pub image_large_url: Option<String>,
     pub prompt: Option<String>,
     pub lyrics: Option<String>,
+    pub style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -246,11 +247,16 @@ fn describe_download_error(context: &str, url: &str, err: ureq::Error) -> String
     }
 }
 
-fn download_to_file(agent: &ureq::Agent, url: &str, path: &Path) -> Result<(), String> {
+fn download_to_file_with_context(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    context: &str,
+) -> Result<(), String> {
     let response = agent
         .get(url)
         .call()
-        .map_err(|err| describe_download_error("Download", url, err))?;
+        .map_err(|err| describe_download_error(context, url, err))?;
     let mut reader = response.into_reader();
     let mut file = fs::File::create(path).map_err(|err| err.to_string())?;
     std::io::copy(&mut reader, &mut file).map_err(|err| err.to_string())?;
@@ -305,7 +311,220 @@ fn metadata_from_value(value: &serde_json::Value) -> SunoMetadata {
             .get("lyrics")
             .and_then(|value| value.as_str())
             .map(|value| value.to_string()),
+        style: value
+            .get("style")
+            .or_else(|| value.get("style_prompt"))
+            .or_else(|| value.get("stylePrompt"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
     }
+}
+
+fn first_string_for_keys(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(|value| value.as_str()) {
+                    if !found.trim().is_empty() {
+                        return Some(found.to_string());
+                    }
+                }
+            }
+            for child in map.values() {
+                if let Some(found) = first_string_for_keys(child, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| first_string_for_keys(item, keys)),
+        _ => None,
+    }
+}
+
+fn metadata_from_embedded_json(value: &serde_json::Value, song_id: &str) -> SunoMetadata {
+    SunoMetadata {
+        id: Some(song_id.to_string()),
+        title: first_string_for_keys(value, &["title", "name"]),
+        display_name: first_string_for_keys(value, &["display_name", "displayName", "artist_name"]),
+        created_at: first_string_for_keys(value, &["created_at", "createdAt", "dateCreated"]),
+        audio_url: first_string_for_keys(value, &["audio_url", "audioUrl", "audio", "contentUrl"]),
+        video_url: first_string_for_keys(value, &["video_url", "videoUrl", "video"]),
+        image_url: first_string_for_keys(
+            value,
+            &["image_url", "imageUrl", "thumbnailUrl", "image"],
+        ),
+        image_large_url: first_string_for_keys(value, &["image_large_url", "imageLargeUrl"]),
+        prompt: first_string_for_keys(
+            value,
+            &[
+                "prompt",
+                "gpt_description_prompt",
+                "description",
+                "style_prompt",
+            ],
+        ),
+        lyrics: first_string_for_keys(value, &["lyrics", "lyric"]),
+        style: first_string_for_keys(value, &["style", "style_prompt", "stylePrompt"]),
+    }
+}
+
+fn merge_metadata(primary: SunoMetadata, secondary: Option<SunoMetadata>) -> SunoMetadata {
+    let Some(secondary) = secondary else {
+        return primary;
+    };
+
+    SunoMetadata {
+        id: primary.id.or(secondary.id),
+        title: primary.title.or(secondary.title),
+        display_name: primary.display_name.or(secondary.display_name),
+        created_at: primary.created_at.or(secondary.created_at),
+        audio_url: primary.audio_url.or(secondary.audio_url),
+        video_url: primary.video_url.or(secondary.video_url),
+        image_url: primary.image_url.or(secondary.image_url),
+        image_large_url: primary.image_large_url.or(secondary.image_large_url),
+        prompt: primary.prompt.or(secondary.prompt),
+        lyrics: primary.lyrics.or(secondary.lyrics),
+        style: primary.style.or(secondary.style),
+    }
+}
+
+fn has_any_metadata(metadata: &SunoMetadata) -> bool {
+    metadata.title.is_some()
+        || metadata.display_name.is_some()
+        || metadata.created_at.is_some()
+        || metadata.audio_url.is_some()
+        || metadata.video_url.is_some()
+        || metadata.image_url.is_some()
+        || metadata.image_large_url.is_some()
+        || metadata.prompt.is_some()
+        || metadata.lyrics.is_some()
+        || metadata.style.is_some()
+}
+
+fn script_contents(html: &str) -> Vec<String> {
+    let mut contents = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("<script") {
+        rest = &rest[start..];
+        let Some(open_end) = rest.find('>') else {
+            break;
+        };
+        let after_open = &rest[open_end + 1..];
+        let Some(close_start) = after_open.find("</script>") else {
+            break;
+        };
+        contents.push(html_unescape(&after_open[..close_start]));
+        rest = &after_open[close_start + "</script>".len()..];
+    }
+    contents
+}
+
+fn html_unescape(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+fn extract_page_metadata_from_html(html: &str, song_id: &str) -> Option<SunoMetadata> {
+    let mut merged = SunoMetadata {
+        id: Some(song_id.to_string()),
+        ..SunoMetadata::default()
+    };
+
+    for script in script_contents(html) {
+        let trimmed = script.trim();
+        if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let metadata = metadata_from_embedded_json(&value, song_id);
+            merged = merge_metadata(merged, Some(metadata));
+        }
+    }
+
+    if !has_any_metadata(&merged) {
+        if let Some(title) = extract_meta_content(html, "og:title").or_else(|| extract_title(html))
+        {
+            merged.title = Some(title);
+        }
+        if let Some(image) = extract_meta_content(html, "og:image") {
+            merged.image_url = Some(image);
+        }
+        if let Some(audio) = extract_meta_content(html, "og:audio") {
+            merged.audio_url = Some(audio);
+        }
+        if let Some(description) = extract_meta_content(html, "description") {
+            merged.prompt = Some(description);
+        }
+    }
+
+    if has_any_metadata(&merged) {
+        Some(merged)
+    } else {
+        None
+    }
+}
+
+fn extract_title(html: &str) -> Option<String> {
+    let start = html.find("<title>")? + "<title>".len();
+    let end = html[start..].find("</title>")? + start;
+    Some(html_unescape(html[start..end].trim()))
+}
+
+fn extract_meta_content(html: &str, name: &str) -> Option<String> {
+    for marker in [
+        format!("property=\"{name}\""),
+        format!("name=\"{name}\""),
+        format!("property='{name}'"),
+        format!("name='{name}'"),
+    ] {
+        let Some(marker_start) = html.find(&marker) else {
+            continue;
+        };
+        let tag_start = html[..marker_start].rfind('<').unwrap_or(marker_start);
+        let tag_end = html[marker_start..]
+            .find('>')
+            .map(|offset| marker_start + offset)
+            .unwrap_or(html.len());
+        let tag = &html[tag_start..tag_end];
+        if let Some(content) = extract_attr(tag, "content") {
+            if !content.trim().is_empty() {
+                return Some(html_unescape(content.trim()));
+            }
+        }
+    }
+    None
+}
+
+fn extract_attr<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
+    let marker = format!("{attr}=");
+    let start = tag.find(&marker)? + marker.len();
+    let quote = tag[start..].chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value_start = start + quote.len_utf8();
+    let value_end = tag[value_start..].find(quote)? + value_start;
+    Some(&tag[value_start..value_end])
+}
+
+fn warm_up_suno_page(agent: &ureq::Agent, suno_url: &str) -> Result<String, String> {
+    let response = agent
+        .get(suno_url)
+        .call()
+        .map_err(|err| describe_download_error("Warm-up Suno page request", suno_url, err))?;
+    let mut text = String::new();
+    response
+        .into_reader()
+        .read_to_string(&mut text)
+        .map_err(|err| format!("Warm-up Suno page read failed for {suno_url}: {err}"))?;
+    Ok(text)
 }
 
 fn clips_from_feed_value(value: &serde_json::Value) -> Vec<SunoMetadata> {
@@ -325,33 +544,81 @@ fn clips_from_feed_value(value: &serde_json::Value) -> Vec<SunoMetadata> {
 fn fetch_suno_metadata_inner(
     agent: &ureq::Agent,
     settings: &AppSettings,
+    suno_url: &str,
     song_id: &str,
 ) -> MetadataFetchResponse {
     let max_pages = settings.suno_max_pages.max(1);
     let mut logs = vec![
-        format!("metadata fetch start: id={song_id}"),
-        format!(
-            "authorization {}",
-            mask_secret(&settings.suno_authorization)
-        ),
-        format!(
-            "browser-token {}",
-            mask_secret(&settings.suno_browser_token)
-        ),
-        format!("device-id {}", mask_secret(&settings.suno_device_id)),
+        format!("id extracted: {song_id}"),
+        format!("warm-up Suno page started: {suno_url}"),
     ];
 
+    let page_metadata = match warm_up_suno_page(agent, suno_url) {
+        Ok(html) => {
+            logs.push("warm-up Suno page succeeded".to_string());
+            logs.push("metadata source attempted: page embedded data".to_string());
+            match extract_page_metadata_from_html(&html, song_id) {
+                Some(metadata) => {
+                    logs.push("metadata source result: page found".to_string());
+                    logs.push(format!(
+                        "metadata selected fields: title {}, lyrics {}, prompt {}, style {}",
+                        yes_no(metadata.title.is_some()),
+                        yes_no(metadata.lyrics.is_some()),
+                        yes_no(metadata.prompt.is_some()),
+                        yes_no(metadata.style.is_some())
+                    ));
+                    Some(metadata)
+                }
+                None => {
+                    logs.push("metadata source result: page unavailable".to_string());
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            logs.push(format!("warm-up Suno page failed: {err}"));
+            logs.push("metadata source attempted: page embedded data".to_string());
+            logs.push("metadata source result: page unavailable".to_string());
+            None
+        }
+    };
+
     if !has_suno_api_settings(settings) {
-        logs.push("Suno API settings are not configured.".to_string());
+        logs.push("metadata source attempted: feed API".to_string());
+        logs.push("metadata source result: feed API skipped because settings missing".to_string());
+        if let Some(metadata) = page_metadata.clone() {
+            return MetadataFetchResponse {
+                success: true,
+                status: "Metadata found".to_string(),
+                song_id: Some(song_id.to_string()),
+                metadata: Some(metadata),
+                pages_checked: 0,
+                logs,
+            };
+        }
         return MetadataFetchResponse {
             success: false,
-            status: "Suno API settings are not configured.".to_string(),
+            status: "Metadata unavailable, using fallback".to_string(),
             song_id: Some(song_id.to_string()),
             metadata: None,
             pages_checked: 0,
             logs,
         };
     }
+
+    logs.push("metadata source attempted: feed API".to_string());
+    logs.push(format!(
+        "authorization {}",
+        mask_secret(&settings.suno_authorization)
+    ));
+    logs.push(format!(
+        "browser-token {}",
+        mask_secret(&settings.suno_browser_token)
+    ));
+    logs.push(format!(
+        "device-id {}",
+        mask_secret(&settings.suno_device_id)
+    ));
 
     for page in 0..max_pages {
         let url = format!("https://studio-api-prod.suno.com/api/feed/?page={page}");
@@ -369,11 +636,16 @@ fn fetch_suno_metadata_inner(
             Err(err) => {
                 let status = describe_download_error("Metadata fetch", &url, err);
                 logs.push(status.clone());
+                let merged = merge_metadata(page_metadata.clone().unwrap_or_default(), None);
                 return MetadataFetchResponse {
-                    success: false,
+                    success: has_any_metadata(&merged),
                     status,
                     song_id: Some(song_id.to_string()),
-                    metadata: None,
+                    metadata: if has_any_metadata(&merged) {
+                        Some(merged)
+                    } else {
+                        None
+                    },
                     pages_checked: page + 1,
                     logs,
                 };
@@ -405,22 +677,29 @@ fn fetch_suno_metadata_inner(
         let clips = clips_from_feed_value(&value);
         logs.push(format!("metadata page={page} clips={}", clips.len()));
         if clips.is_empty() {
+            let merged = merge_metadata(page_metadata.clone().unwrap_or_default(), None);
             return MetadataFetchResponse {
-                success: false,
+                success: has_any_metadata(&merged),
                 status: "Metadata unavailable, using fallback".to_string(),
                 song_id: Some(song_id.to_string()),
-                metadata: None,
+                metadata: if has_any_metadata(&merged) {
+                    Some(merged)
+                } else {
+                    None
+                },
                 pages_checked: page + 1,
                 logs,
             };
         }
         if let Some(metadata) = find_matching_clip(&clips, song_id) {
             logs.push(format!("metadata match page={page} id={song_id}"));
+            logs.push("metadata source result: feed API found".to_string());
+            let merged = merge_metadata(page_metadata.clone().unwrap_or_default(), Some(metadata));
             return MetadataFetchResponse {
                 success: true,
                 status: "Metadata found".to_string(),
                 song_id: Some(song_id.to_string()),
-                metadata: Some(metadata),
+                metadata: Some(merged),
                 pages_checked: page + 1,
                 logs,
             };
@@ -428,37 +707,32 @@ fn fetch_suno_metadata_inner(
     }
 
     logs.push(format!("metadata match not found within {max_pages} pages"));
+    logs.push("metadata source result: feed API no match".to_string());
+    let merged = merge_metadata(page_metadata.clone().unwrap_or_default(), None);
     MetadataFetchResponse {
-        success: false,
+        success: has_any_metadata(&merged),
         status: "Metadata unavailable, using fallback".to_string(),
         song_id: Some(song_id.to_string()),
-        metadata: None,
+        metadata: if has_any_metadata(&merged) {
+            Some(merged)
+        } else {
+            None
+        },
         pages_checked: max_pages,
         logs,
     }
 }
 
-fn warm_up_direct_downloads(
-    agent: &ureq::Agent,
-    suno_url: &str,
-    cover_url: Option<&str>,
-) -> Result<(), String> {
-    agent
-        .get(suno_url)
-        .call()
-        .map(|_| ())
-        .map_err(|err| describe_download_error("Warm-up Suno page request", suno_url, err))?;
-
-    if let Some(cover_url) = cover_url {
-        agent
-            .get(cover_url)
-            .set("Range", "bytes=0-0")
-            .call()
-            .map(|_| ())
-            .map_err(|err| describe_download_error("Warm-up cover request", cover_url, err))?;
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
     }
+}
 
-    Ok(())
+fn warm_up_direct_downloads(agent: &ureq::Agent, suno_url: &str) -> Result<(), String> {
+    warm_up_suno_page(agent, suno_url).map(|_| ())
 }
 
 fn write_base64_image(data_url: &str, path: &Path) -> Result<(), String> {
@@ -837,7 +1111,7 @@ fn fetch_suno_metadata(app: AppHandle, url: String) -> MetadataFetchResponse {
         }
     };
     let agent = ureq::AgentBuilder::new().build();
-    fetch_suno_metadata_inner(&agent, &settings, &song_id)
+    fetch_suno_metadata_inner(&agent, &settings, &url, &song_id)
 }
 
 #[tauri::command]
@@ -910,22 +1184,13 @@ fn generate_mp4_inner(
         .filter(|url| !url.trim().is_empty())
         .unwrap_or(&mp3_url)
         .to_string();
-    let has_frontend_cover = request.base64.is_some();
-    warm_up_direct_downloads(
-        &http_agent,
-        &request.url,
-        if has_frontend_cover {
-            None
-        } else {
-            Some(&cover_url)
-        },
-    )?;
+    warm_up_direct_downloads(&http_agent, &request.url)?;
 
-    download_to_file(&http_agent, &mp3_url, &mp3_path)?;
+    download_to_file_with_context(&http_agent, &mp3_url, &mp3_path, "Audio download")?;
     if let Some(base64) = request.base64 {
         write_base64_image(&base64, &cover_path)?;
     } else {
-        download_to_file(&http_agent, &cover_url, &cover_path)?;
+        download_to_file_with_context(&http_agent, &cover_url, &cover_path, "Cover fetch")?;
     }
 
     let args = build_ffmpeg_args(
@@ -1054,6 +1319,69 @@ mod tests {
             select_audio_source(None, "https://cdn1.suno.ai/id.mp3"),
             "https://cdn1.suno.ai/id.mp3"
         );
+    }
+
+    #[test]
+    fn extracts_page_metadata_from_embedded_json() {
+        let html = r#"
+            <html><head>
+            <script type="application/json">
+            {
+                "props": {
+                    "clip": {
+                        "title": "Page title",
+                        "audio_url": "https://cdn.suno.test/audio.mp3",
+                        "image_large_url": "https://cdn.suno.test/large.jpeg",
+                        "lyrics": "la la",
+                        "style_prompt": "cinematic pop"
+                    }
+                }
+            }
+            </script>
+            </head></html>
+        "#;
+
+        let metadata = extract_page_metadata_from_html(html, "song-id").expect("metadata");
+
+        assert_eq!(metadata.id, Some("song-id".to_string()));
+        assert_eq!(metadata.title, Some("Page title".to_string()));
+        assert_eq!(
+            metadata.audio_url,
+            Some("https://cdn.suno.test/audio.mp3".to_string())
+        );
+        assert_eq!(
+            metadata.image_large_url,
+            Some("https://cdn.suno.test/large.jpeg".to_string())
+        );
+        assert_eq!(metadata.lyrics, Some("la la".to_string()));
+        assert_eq!(metadata.style, Some("cinematic pop".to_string()));
+    }
+
+    #[test]
+    fn page_metadata_has_priority_when_merged_with_feed_metadata() {
+        let page = SunoMetadata {
+            audio_url: Some("https://page.test/audio.mp3".to_string()),
+            image_large_url: Some("https://page.test/image.jpeg".to_string()),
+            ..SunoMetadata::default()
+        };
+        let feed = SunoMetadata {
+            audio_url: Some("https://feed.test/audio.mp3".to_string()),
+            image_large_url: Some("https://feed.test/image.jpeg".to_string()),
+            title: Some("Feed title".to_string()),
+            ..SunoMetadata::default()
+        };
+
+        let merged = merge_metadata(page, Some(feed));
+
+        assert_eq!(
+            merged.audio_url,
+            Some("https://page.test/audio.mp3".to_string())
+        );
+        assert_eq!(
+            merged.image_large_url,
+            Some("https://page.test/image.jpeg".to_string())
+        );
+        assert_eq!(merged.title, Some("Feed title".to_string()));
     }
 
     #[test]
