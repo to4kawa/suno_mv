@@ -5,7 +5,7 @@
   "scripts": {
     "start": "tauri dev",
     "dev": "tauri dev",
-    "serve": "python3 -m http.server 1430 --directory public",
+    "serve": "python -m http.server 1430 --directory public",
     "test": "node --test"
   },
   "devDependencies": {
