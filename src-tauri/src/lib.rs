@@ -1,6 +1,7 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -112,19 +113,75 @@ pub fn build_ffmpeg_args(
     ]
 }
 
-pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
-    let output = Command::new("ffmpeg")
-        .args(args)
-        .output()
-        .map_err(|err| err.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+#[derive(Debug)]
+struct FfmpegCandidate {
+    label: &'static str,
+    path: PathBuf,
+}
 
-    if output.status.success() {
-        Ok((stdout, stderr))
-    } else {
-        Err(stderr)
+fn ffmpeg_candidates() -> Vec<FfmpegCandidate> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = env::var("SUNO_MV_FFMPEG_PATH") {
+        if !path.trim().is_empty() {
+            candidates.push(FfmpegCandidate {
+                label: "SUNO_MV_FFMPEG_PATH",
+                path: PathBuf::from(path),
+            });
+        }
     }
+
+    let project_local = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+        .join("tools")
+        .join("ffmpeg")
+        .join("bin")
+        .join("ffmpeg.exe");
+    if project_local.is_file() {
+        candidates.push(FfmpegCandidate {
+            label: "project-local tools/ffmpeg/bin/ffmpeg.exe",
+            path: project_local,
+        });
+    }
+
+    candidates.push(FfmpegCandidate {
+        label: "ffmpeg from PATH",
+        path: PathBuf::from("ffmpeg"),
+    });
+
+    candidates
+}
+
+pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
+    let candidates = ffmpeg_candidates();
+    let mut tried = Vec::new();
+
+    for candidate in &candidates {
+        match Command::new(&candidate.path).args(args).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+                return if output.status.success() {
+                    Ok((stdout, stderr))
+                } else {
+                    Err(stderr)
+                };
+            }
+            Err(err) => tried.push(format!(
+                "{} ({}): {}",
+                candidate.label,
+                candidate.path.display(),
+                err
+            )),
+        }
+    }
+
+    Err(format!(
+        "FFmpeg executable was not found or could not be started. Tried: {}",
+        tried.join("; ")
+    ))
 }
 
 #[tauri::command]
@@ -235,5 +292,30 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg.contains("showspectrum=s=1280x720:mode=combined")));
+    }
+
+    #[test]
+    fn includes_path_ffmpeg_candidate() {
+        let candidates = ffmpeg_candidates();
+        assert!(candidates.iter().any(|candidate| {
+            candidate.label == "ffmpeg from PATH" && candidate.path == PathBuf::from("ffmpeg")
+        }));
+    }
+
+    #[test]
+    fn prefers_env_ffmpeg_candidate() {
+        let previous = env::var("SUNO_MV_FFMPEG_PATH").ok();
+        env::set_var("SUNO_MV_FFMPEG_PATH", "C:\\ffmpeg\\bin\\ffmpeg.exe");
+
+        let candidates = ffmpeg_candidates();
+
+        match previous {
+            Some(value) => env::set_var("SUNO_MV_FFMPEG_PATH", value),
+            None => env::remove_var("SUNO_MV_FFMPEG_PATH"),
+        }
+
+        let first = candidates.first().expect("expected ffmpeg candidates");
+        assert_eq!(first.label, "SUNO_MV_FFMPEG_PATH");
+        assert_eq!(first.path, PathBuf::from("C:\\ffmpeg\\bin\\ffmpeg.exe"));
     }
 }
