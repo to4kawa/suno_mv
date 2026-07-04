@@ -9,7 +9,7 @@ use std::process::Command;
 use tauri::{AppHandle, Manager};
 
 const ALLOWED_RESOLUTIONS: &[&str] = &["1280x720", "1920x1080", "1080x1080"];
-const ALLOWED_VISUALIZERS: &[&str] = &["combined", "separate", "single"];
+const ALLOWED_VISUALIZERS: &[&str] = &["none", "spectrum"];
 const ALLOWED_ENCODER_PRESETS: &[&str] = &["cpu_x264", "amd_amf"];
 const ALLOWED_QUALITIES: &[&str] = &["standard", "high"];
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -762,9 +762,7 @@ pub fn build_ffmpeg_args(
     } else {
         "yuv420p"
     };
-    let filter_complex = format!(
-        "[0:a]showspectrum=s={resolution}:mode={visualizer}[spec];[1:v][spec]overlay=format=auto,scale=trunc(iw/2)*2:trunc(ih/2)*2,format={video_format}[v]"
-    );
+    let filter_complex = build_video_filter_complex(resolution, visualizer, video_format);
     let mut args = vec![
         "-y".into(),
         "-i".into(),
@@ -819,6 +817,21 @@ pub fn build_ffmpeg_args(
         output_path.to_string_lossy().into_owned(),
     ]);
     args
+}
+
+pub fn build_video_filter_complex(
+    resolution: &str,
+    visualizer: &str,
+    video_format: &str,
+) -> String {
+    let final_video_filter = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,format={video_format}[v]");
+    if visualizer == "spectrum" {
+        format!(
+            "[0:a]showspectrum=s={resolution}:mode=combined[spec];[1:v][spec]overlay=format=auto,{final_video_filter}"
+        )
+    } else {
+        format!("[1:v]{final_video_filter}")
+    }
 }
 
 #[derive(Debug)]
@@ -1134,7 +1147,7 @@ fn generate_mp4_inner(
     let id =
         safe_id(&extract_suno_id(&request.url).ok_or_else(|| "Suno曲のURLが無効です".to_string())?);
     let resolution = request.resolution.unwrap_or_else(|| "1280x720".to_string());
-    let visualizer = request.visualizer.unwrap_or_else(|| "combined".to_string());
+    let visualizer = request.visualizer.unwrap_or_else(|| "none".to_string());
     let saved_settings = read_settings(&app).unwrap_or_default();
     let ffmpeg_auto_detect = request
         .ffmpeg_auto_detect
@@ -1414,8 +1427,9 @@ mod tests {
     fn validates_allowlists() {
         assert!(ensure_allowed("1280x720", ALLOWED_RESOLUTIONS, "resolution").is_ok());
         assert!(ensure_allowed("640x480", ALLOWED_RESOLUTIONS, "resolution").is_err());
-        assert!(ensure_allowed("combined", ALLOWED_VISUALIZERS, "visualizer").is_ok());
-        assert!(ensure_allowed("spectrum", ALLOWED_VISUALIZERS, "visualizer").is_err());
+        assert!(ensure_allowed("none", ALLOWED_VISUALIZERS, "visualizer").is_ok());
+        assert!(ensure_allowed("spectrum", ALLOWED_VISUALIZERS, "visualizer").is_ok());
+        assert!(ensure_allowed("combined", ALLOWED_VISUALIZERS, "visualizer").is_err());
     }
 
     #[test]
@@ -1425,20 +1439,40 @@ mod tests {
             Path::new("/tmp/cover image.jpeg"),
             Path::new("/tmp/out file.mp4"),
             "1280x720",
-            "combined",
+            "none",
             "cpu_x264",
             "standard",
         );
         assert!(args.contains(&"/tmp/audio file.mp3".to_string()));
         assert!(args.contains(&"/tmp/cover image.jpeg".to_string()));
+        assert!(!args.iter().any(|arg| arg.contains("showspectrum")));
+        assert!(!args.iter().any(|arg| arg.contains("overlay")));
+        assert!(args
+            .iter()
+            .any(|arg| arg.contains("[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[v]")));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "[v]"]));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "0:a"]));
+    }
+
+    #[test]
+    fn builds_spectrum_filter_when_requested() {
+        let args = build_ffmpeg_args(
+            Path::new("/tmp/audio.mp3"),
+            Path::new("/tmp/cover.jpeg"),
+            Path::new("/tmp/out.mp4"),
+            "1280x720",
+            "spectrum",
+            "cpu_x264",
+            "standard",
+        );
+
         assert!(args
             .iter()
             .any(|arg| arg.contains("showspectrum=s=1280x720:mode=combined")));
+        assert!(args.iter().any(|arg| arg.contains("overlay=format=auto")));
         assert!(args
             .iter()
             .any(|arg| arg.contains("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[v]")));
-        assert!(args.windows(2).any(|pair| pair == ["-map", "[v]"]));
-        assert!(args.windows(2).any(|pair| pair == ["-map", "0:a"]));
     }
 
     #[test]
@@ -1492,7 +1526,7 @@ mod tests {
             Path::new("/tmp/cover.jpeg"),
             Path::new("/tmp/out.mp4"),
             "1280x720",
-            "combined",
+            "none",
             "amd_amf",
             "standard",
         );
@@ -1511,7 +1545,7 @@ mod tests {
             Path::new("/tmp/cover.jpeg"),
             Path::new("/tmp/out.mp4"),
             "1280x720",
-            "combined",
+            "none",
             "amd_amf",
             "high",
         );

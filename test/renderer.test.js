@@ -51,3 +51,11 @@ test('renderer logs do not call cover CDN request warm-up', () => {
   assert.doesNotMatch(renderer, /Warm-up cover request|warm-up cover/i);
   assert.doesNotMatch(rust, /Warm-up cover request|warm-up cover/i);
 });
+
+test('visualizer defaults to none and exposes spectrum mode', () => {
+  const html = fs.readFileSync('public/index.html', 'utf8');
+  const noneIndex = html.indexOf('<option value="none">none</option>');
+  const spectrumIndex = html.indexOf('<option value="spectrum">spectrum</option>');
+  assert.ok(noneIndex > -1);
+  assert.ok(spectrumIndex > noneIndex);
+});
