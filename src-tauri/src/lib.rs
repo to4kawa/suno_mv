@@ -137,6 +137,14 @@ pub fn build_ffmpeg_args(
     encoder_preset: &str,
     quality: &str,
 ) -> Vec<String> {
+    let video_format = if encoder_preset == "amd_amf" {
+        "nv12"
+    } else {
+        "yuv420p"
+    };
+    let filter_complex = format!(
+        "[0:a]showspectrum=s={resolution}:mode={visualizer}[spec];[1:v][spec]overlay=format=auto,scale=trunc(iw/2)*2:trunc(ih/2)*2,format={video_format}[v]"
+    );
     let mut args = vec![
         "-y".into(),
         "-i".into(),
@@ -146,7 +154,11 @@ pub fn build_ffmpeg_args(
         "-i".into(),
         cover_path.to_string_lossy().into_owned(),
         "-filter_complex".into(),
-        format!("[0:a]showspectrum=s={resolution}:mode={visualizer}[spec];[1:v][spec]overlay=format=auto"),
+        filter_complex,
+        "-map".into(),
+        "[v]".into(),
+        "-map".into(),
+        "0:a".into(),
         "-shortest".into(),
     ];
 
@@ -499,10 +511,7 @@ fn generate_mp4_inner(
     if let Some(base64) = request.base64 {
         write_base64_image(&base64, &cover_path)?;
     } else {
-        download_to_file(
-            &format!("https://cdn2.suno.ai/image_large_{id}.jpeg"),
-            &cover_path,
-        )?;
+        download_to_file(&format!("https://cdn2.suno.ai/{id}.jpeg"), &cover_path)?;
     }
 
     let args = build_ffmpeg_args(
@@ -583,6 +592,11 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg.contains("showspectrum=s=1280x720:mode=combined")));
+        assert!(args
+            .iter()
+            .any(|arg| arg.contains("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[v]")));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "[v]"]));
+        assert!(args.windows(2).any(|pair| pair == ["-map", "0:a"]));
     }
 
     #[test]
@@ -642,6 +656,9 @@ mod tests {
         );
 
         assert!(args.windows(2).any(|pair| pair == ["-c:v", "h264_amf"]));
+        assert!(args
+            .iter()
+            .any(|arg| arg.contains("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=nv12[v]")));
         assert!(!args.iter().any(|arg| arg == "libx264"));
     }
 
@@ -657,7 +674,9 @@ mod tests {
             "high",
         );
 
-        assert!(args.windows(2).any(|pair| pair == ["-usage", "transcoding"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-usage", "transcoding"]));
         assert!(args.windows(2).any(|pair| pair == ["-quality", "quality"]));
         assert!(!args.windows(2).any(|pair| pair == ["-usage", "quality"]));
     }
