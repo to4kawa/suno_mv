@@ -128,7 +128,7 @@ pub fn run_ffmpeg(args: &[String]) -> Result<(String, String), String> {
 }
 
 #[tauri::command]
-pub fn generate_mp4(app: AppHandle, request: GenerateRequest) -> GenerateResponse {
+fn generate_mp4(app: AppHandle, request: GenerateRequest) -> GenerateResponse {
     match generate_mp4_inner(app, request) {
         Ok(response) => response,
         Err(stderr) => GenerateResponse {
