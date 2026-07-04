@@ -1,6 +1,7 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap as StdBTreeMap;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -264,6 +265,39 @@ fn download_to_file_with_context(
 }
 
 fn metadata_from_value(value: &serde_json::Value) -> SunoMetadata {
+    let nested_metadata = value.get("metadata").and_then(|value| value.as_object());
+    let prompt = value
+        .get("prompt")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            nested_metadata
+                .and_then(|metadata| metadata.get("prompt"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+        });
+    let lyrics = value
+        .get("lyrics")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            prompt
+                .as_deref()
+                .filter(|prompt| looks_like_lyrics(prompt))
+                .map(|prompt| prompt.to_string())
+        });
+    let style = value
+        .get("style")
+        .or_else(|| value.get("style_prompt"))
+        .or_else(|| value.get("stylePrompt"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            nested_metadata
+                .and_then(|metadata| metadata.get("tags"))
+                .and_then(tags_to_style)
+        });
+
     SunoMetadata {
         id: value
             .get("id")
@@ -303,20 +337,9 @@ fn metadata_from_value(value: &serde_json::Value) -> SunoMetadata {
             .or_else(|| value.get("imageLargeUrl"))
             .and_then(|value| value.as_str())
             .map(|value| value.to_string()),
-        prompt: value
-            .get("prompt")
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string()),
-        lyrics: value
-            .get("lyrics")
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string()),
-        style: value
-            .get("style")
-            .or_else(|| value.get("style_prompt"))
-            .or_else(|| value.get("stylePrompt"))
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string()),
+        prompt,
+        lyrics,
+        style,
     }
 }
 
@@ -371,6 +394,216 @@ fn metadata_from_embedded_json(value: &serde_json::Value, song_id: &str) -> Suno
     }
 }
 
+fn clip_metadata_from_value(value: &serde_json::Value, song_id: &str) -> Option<SunoMetadata> {
+    clip_metadata_from_value_with_records(value, song_id, &StdBTreeMap::new())
+}
+
+fn clip_metadata_from_value_with_records(
+    value: &serde_json::Value,
+    song_id: &str,
+    rsc_records: &StdBTreeMap<String, String>,
+) -> Option<SunoMetadata> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(clip) = map.get("clip").and_then(|clip| clip.as_object()) {
+                let id_matches = clip
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|id| id == song_id);
+                let has_clip_shape = clip.contains_key("audio_url")
+                    || clip.contains_key("image_url")
+                    || clip.contains_key("image_large_url");
+                let id_missing = clip.get("id").and_then(|value| value.as_str()).is_none();
+                if id_matches || (id_missing && has_clip_shape) {
+                    return Some(metadata_from_clip_object(clip, song_id, rsc_records));
+                }
+            }
+
+            for child in map.values() {
+                if let Some(metadata) =
+                    clip_metadata_from_value_with_records(child, song_id, rsc_records)
+                {
+                    return Some(metadata);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| clip_metadata_from_value_with_records(item, song_id, rsc_records)),
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                match serde_json::from_str::<serde_json::Value>(trimmed) {
+                    Ok(value) => clip_metadata_from_value_with_records(&value, song_id, rsc_records),
+                    Err(_) => json_fragments_from_payload(trimmed)
+                        .iter()
+                        .find_map(|value| {
+                            clip_metadata_from_value_with_records(value, song_id, rsc_records)
+                        }),
+                }
+            } else if trimmed.contains('{') || trimmed.contains('[') {
+                json_fragments_from_payload(trimmed)
+                    .iter()
+                    .find_map(|value| {
+                        clip_metadata_from_value_with_records(value, song_id, rsc_records)
+                    })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn metadata_from_clip_object(
+    clip: &serde_json::Map<String, serde_json::Value>,
+    song_id: &str,
+    rsc_records: &StdBTreeMap<String, String>,
+) -> SunoMetadata {
+    let metadata = clip.get("metadata").and_then(|value| value.as_object());
+    let prompt_raw = metadata
+        .and_then(|metadata| metadata.get("prompt"))
+        .and_then(|value| value.as_str())
+        .map(|value| resolve_rsc_text_reference(value, rsc_records));
+    let tags = metadata
+        .and_then(|metadata| metadata.get("tags"))
+        .and_then(tags_to_style);
+    let lyrics = prompt_raw
+        .as_deref()
+        .filter(|prompt| looks_like_lyrics(prompt))
+        .map(|prompt| prompt.to_string());
+
+    SunoMetadata {
+        id: clip
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .or_else(|| Some(song_id.to_string())),
+        title: clip
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        display_name: clip
+            .get("display_name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        created_at: clip
+            .get("created_at")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        audio_url: clip
+            .get("audio_url")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        video_url: clip
+            .get("video_url")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        image_url: clip
+            .get("image_url")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        image_large_url: clip
+            .get("image_large_url")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        prompt: prompt_raw.clone(),
+        lyrics,
+        style: tags,
+    }
+}
+
+fn tags_to_style(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Array(items) => {
+            let tags = items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .filter(|item| !item.trim().is_empty())
+                .map(|item| item.trim().to_string())
+                .collect::<Vec<_>>();
+            if tags.is_empty() {
+                None
+            } else {
+                Some(tags.join(", "))
+            }
+        }
+        serde_json::Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+        _ => None,
+    }
+}
+
+fn looks_like_lyrics(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    if lower.lines().any(has_lyric_section_marker) {
+        return true;
+    }
+
+    let short_lines = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && line.chars().count() <= 80)
+        .count();
+    short_lines >= 4
+}
+
+fn has_lyric_section_marker(line: &str) -> bool {
+    let line = line.trim();
+    [
+        "[verse",
+        "[chorus",
+        "[bridge",
+        "[breakdown",
+        "[final chorus",
+        "[intro",
+        "[outro",
+        "[pre-chorus",
+        "[hook",
+    ]
+    .iter()
+    .any(|marker| line.starts_with(marker) && line.contains(']'))
+}
+
+fn resolve_rsc_text_reference(value: &str, rsc_records: &StdBTreeMap<String, String>) -> String {
+    let trimmed = value.trim();
+    let Some(record_id) = trimmed.strip_prefix('$') else {
+        return value.to_string();
+    };
+    if record_id.is_empty()
+        || !record_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return value.to_string();
+    }
+    rsc_records
+        .get(record_id)
+        .map(|record| lyric_text_from_record(record))
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn lyric_text_from_record(value: &str) -> String {
+    let lower = value.to_lowercase();
+    let marker_start = [
+        "[intro",
+        "[verse",
+        "[chorus",
+        "[bridge",
+        "[breakdown",
+        "[final chorus",
+        "[outro",
+        "[hook",
+        "[pre-chorus",
+    ]
+    .iter()
+    .filter_map(|marker| lower.find(marker))
+    .min();
+    marker_start
+        .map(|start| value[start..].to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
 fn merge_metadata(primary: SunoMetadata, secondary: Option<SunoMetadata>) -> SunoMetadata {
     let Some(secondary) = secondary else {
         return primary;
@@ -422,6 +655,206 @@ fn script_contents(html: &str) -> Vec<String> {
     contents
 }
 
+fn extract_next_f_payloads(html: &str) -> Vec<String> {
+    let marker = "self.__next_f.push(";
+    let mut payloads = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find(marker) {
+        let payload_start = start + marker.len();
+        let chars: Vec<(usize, char)> = rest[payload_start..].char_indices().collect();
+        let mut depth = 1usize;
+        let mut in_string: Option<char> = None;
+        let mut escaped = false;
+        let mut end_offset = None;
+        for (offset, ch) in chars {
+            if let Some(quote) = in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == quote {
+                    in_string = None;
+                }
+                continue;
+            }
+            match ch {
+                '"' | '\'' | '`' => in_string = Some(ch),
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_offset = Some(offset);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end_offset) = end_offset {
+            payloads.push(html_unescape(&rest[payload_start..payload_start + end_offset]));
+            rest = &rest[payload_start + end_offset + 1..];
+        } else {
+            break;
+        }
+    }
+    payloads
+}
+
+fn json_fragments_from_payload(payload: &str) -> Vec<serde_json::Value> {
+    let mut values = Vec::new();
+    for (open, close) in [('[', ']'), ('{', '}')] {
+        let mut search_start = 0;
+        while let Some(relative_start) = payload[search_start..].find(open) {
+            let start = search_start + relative_start;
+            if let Some(end) = find_balanced_json_end(&payload[start..], open, close) {
+                let fragment = &payload[start..start + end];
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(fragment) {
+                    values.push(value);
+                }
+                search_start = start + end;
+            } else {
+                break;
+            }
+        }
+    }
+    let nested = values
+        .iter()
+        .flat_map(json_fragments_from_json_strings)
+        .collect::<Vec<_>>();
+    values.extend(nested);
+    values
+}
+
+fn json_fragments_from_json_strings(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut values = Vec::new();
+    match value {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                match serde_json::from_str::<serde_json::Value>(trimmed) {
+                    Ok(value) => values.push(value),
+                    Err(_) => values.extend(json_fragments_from_payload(trimmed)),
+                }
+            } else if trimmed.contains('{') || trimmed.contains('[') {
+                values.extend(json_fragments_from_payload(trimmed));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                values.extend(json_fragments_from_json_strings(item));
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                values.extend(json_fragments_from_json_strings(item));
+            }
+        }
+        _ => {}
+    }
+    values
+}
+
+fn stream_text_chunks_from_payload(payload: &str) -> Vec<String> {
+    match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                serde_json::Value::String(text) => Some(text),
+                _ => None,
+            })
+            .collect(),
+        Ok(serde_json::Value::String(text)) => vec![text],
+        _ => Vec::new(),
+    }
+}
+
+fn stream_text_chunks_from_html(html: &str) -> Vec<String> {
+    extract_next_f_payloads(html)
+        .into_iter()
+        .flat_map(|payload| stream_text_chunks_from_payload(&payload))
+        .collect()
+}
+
+fn parse_rsc_records_from_chunks(chunks: &[String]) -> StdBTreeMap<String, String> {
+    fn split_record_line(line: &str) -> Option<(&str, &str)> {
+        let trimmed = line.trim_start();
+        let colon_index = trimmed.find(':')?;
+        let record_id = &trimmed[..colon_index];
+        if record_id.is_empty()
+            || !record_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        {
+            return None;
+        }
+        Some((record_id, &trimmed[colon_index + 1..]))
+    }
+
+    let mut records = StdBTreeMap::new();
+    for chunk in chunks {
+        let mut current_record_id: Option<String> = None;
+        let mut current_payload = String::new();
+        for line in chunk.lines() {
+            if let Some((record_id, payload)) = split_record_line(line) {
+                if let Some(previous_record_id) = current_record_id.replace(record_id.to_string()) {
+                    records
+                        .entry(previous_record_id)
+                        .and_modify(|existing: &mut String| {
+                            existing.push('\n');
+                            existing.push_str(&current_payload);
+                        })
+                        .or_insert_with(|| current_payload.clone());
+                    current_payload.clear();
+                }
+                current_payload.push_str(payload);
+            } else if current_record_id.is_some() {
+                current_payload.push('\n');
+                current_payload.push_str(line);
+            }
+        }
+        if let Some(record_id) = current_record_id {
+            records
+                .entry(record_id)
+                .and_modify(|existing: &mut String| {
+                    existing.push('\n');
+                    existing.push_str(&current_payload);
+                })
+                .or_insert(current_payload);
+        }
+    }
+    records
+}
+
+fn find_balanced_json_end(value: &str, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in value.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            ch if ch == open => depth += 1,
+            ch if ch == close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn html_unescape(value: &str) -> String {
     value
         .replace("&quot;", "\"")
@@ -432,40 +865,57 @@ fn html_unescape(value: &str) -> String {
 }
 
 fn extract_page_metadata_from_html(html: &str, song_id: &str) -> Option<SunoMetadata> {
-    let mut merged = SunoMetadata {
-        id: Some(song_id.to_string()),
-        ..SunoMetadata::default()
-    };
+    let mut clip_metadata = None;
+    let stream_text_chunks = stream_text_chunks_from_html(html);
+    let rsc_records = parse_rsc_records_from_chunks(&stream_text_chunks);
 
     for script in script_contents(html) {
         let trimmed = script.trim();
-        if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
-            continue;
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(metadata) =
+                    clip_metadata_from_value_with_records(&value, song_id, &rsc_records)
+                {
+                    clip_metadata = Some(metadata);
+                    break;
+                }
+            }
         }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            let metadata = metadata_from_embedded_json(&value, song_id);
-            merged = merge_metadata(merged, Some(metadata));
+        if trimmed.contains("self.__next_f.push") {
+            for payload in extract_next_f_payloads(trimmed) {
+                for value in json_fragments_from_payload(&payload) {
+                    if let Some(metadata) =
+                        clip_metadata_from_value_with_records(&value, song_id, &rsc_records)
+                    {
+                        clip_metadata = Some(metadata);
+                        break;
+                    }
+                }
+                if clip_metadata.is_some() {
+                    break;
+                }
+            }
+        }
+        if clip_metadata.is_some() {
+            break;
         }
     }
 
-    if !has_any_metadata(&merged) {
-        if let Some(title) = extract_meta_content(html, "og:title").or_else(|| extract_title(html))
-        {
-            merged.title = Some(title);
-        }
-        if let Some(image) = extract_meta_content(html, "og:image") {
-            merged.image_url = Some(image);
-        }
-        if let Some(audio) = extract_meta_content(html, "og:audio") {
-            merged.audio_url = Some(audio);
-        }
-        if let Some(description) = extract_meta_content(html, "description") {
-            merged.prompt = Some(description);
-        }
+    let mut metadata = clip_metadata.unwrap_or_else(|| SunoMetadata {
+        id: Some(song_id.to_string()),
+        ..SunoMetadata::default()
+    });
+
+    if metadata.title.is_none() {
+        metadata.title = extract_meta_content(html, "og:title").or_else(|| extract_title(html));
+    }
+    if metadata.image_large_url.is_none() && metadata.image_url.is_none() {
+        metadata.image_url = extract_meta_content(html, "og:image")
+            .or_else(|| extract_meta_content(html, "twitter:image"));
     }
 
-    if has_any_metadata(&merged) {
-        Some(merged)
+    if has_any_metadata(&metadata) {
+        Some(metadata)
     } else {
         None
     }
@@ -1254,8 +1704,6 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    const DEFAULT_INSPECT_URL: &str = "https://suno.com/song/daf62c51-6b0a-4dd2-bfa7-99795df4720c";
-
     #[derive(Debug, Serialize)]
     struct InspectMetaTag {
         name_or_property: String,
@@ -1274,8 +1722,57 @@ mod tests {
         index: usize,
         char_length: usize,
         summary: String,
+        preview_start: String,
+        preview_end: String,
+        decoded_payload: String,
         matches: Vec<NextPayloadMatch>,
         decoded_json_fragment_count: usize,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct RscRecordSummary {
+        record_id: String,
+        char_length: usize,
+        preview_start: String,
+        preview_end: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct StreamTextSummary {
+        index: usize,
+        char_length: usize,
+        preview_start: String,
+        preview_end: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ClipReferenceDiagnostic {
+        token: String,
+        record_id: String,
+        exists: bool,
+        referenced_record_length: Option<usize>,
+        referenced_record_preview_start: Option<String>,
+        referenced_record_preview_end: Option<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ExtractedClipSourceDiagnostic {
+        source: String,
+        raw_clip_metadata_fields: BTreeMap<String, String>,
+        reference_tokens: Vec<String>,
+        references: Vec<ClipReferenceDiagnostic>,
+        unresolved_references: Vec<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ExtractedClipDiagnostic {
+        title: Option<String>,
+        audio_url: Option<String>,
+        image_url: Option<String>,
+        image_large_url: Option<String>,
+        metadata_tags: Option<String>,
+        metadata_prompt_preview: Option<String>,
+        metadata_prompt_length: usize,
     }
 
     #[derive(Debug, Serialize)]
@@ -1289,12 +1786,22 @@ mod tests {
         meta_tags: Vec<InspectMetaTag>,
         json_script_count: usize,
         next_payload_count: usize,
+        push_count: usize,
+        decoded_payload_total_length: usize,
         next_payloads: Vec<NextPayloadSummary>,
+        stream_text_count: usize,
+        stream_text_total_length: usize,
+        stream_texts: Vec<StreamTextSummary>,
+        rsc_record_count: usize,
+        rsc_record_ids: Vec<String>,
+        rsc_records: Vec<RscRecordSummary>,
+        extracted_clip: Option<ExtractedClipDiagnostic>,
+        extracted_clip_source: Option<ExtractedClipSourceDiagnostic>,
         recursive_keys: BTreeMap<String, Vec<String>>,
         candidate_values: BTreeMap<String, Vec<String>>,
     }
 
-    fn sanitize_inspection_text(value: &str) -> String {
+    fn mask_sensitive_text(value: &str) -> String {
         let mut sanitized = value.to_string();
         for marker in [
             "authorization",
@@ -1319,7 +1826,22 @@ mod tests {
                 search_start = (value_start + 4).min(sanitized.len());
             }
         }
-        sanitized.chars().take(500).collect()
+        sanitized
+    }
+
+    fn sanitize_inspection_text(value: &str) -> String {
+        mask_sensitive_text(value).chars().take(500).collect()
+    }
+
+    fn inspection_preview_start(value: &str) -> String {
+        sanitize_inspection_text(value)
+    }
+
+    fn inspection_preview_end(value: &str) -> String {
+        let char_count = value.chars().count();
+        let start = char_count.saturating_sub(500);
+        let tail = value.chars().skip(start).collect::<String>();
+        sanitize_inspection_text(&tail)
     }
 
     fn inspect_meta_tags(html: &str) -> Vec<InspectMetaTag> {
@@ -1360,53 +1882,6 @@ mod tests {
             .collect()
     }
 
-    fn extract_next_f_payloads(html: &str) -> Vec<String> {
-        let marker = "self.__next_f.push(";
-        let mut payloads = Vec::new();
-        let mut rest = html;
-        while let Some(start) = rest.find(marker) {
-            let payload_start = start + marker.len();
-            let chars: Vec<(usize, char)> = rest[payload_start..].char_indices().collect();
-            let mut depth = 1usize;
-            let mut in_string: Option<char> = None;
-            let mut escaped = false;
-            let mut end_offset = None;
-            for (offset, ch) in chars {
-                if let Some(quote) = in_string {
-                    if escaped {
-                        escaped = false;
-                    } else if ch == '\\' {
-                        escaped = true;
-                    } else if ch == quote {
-                        in_string = None;
-                    }
-                    continue;
-                }
-                match ch {
-                    '"' | '\'' | '`' => in_string = Some(ch),
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end_offset = Some(offset);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(end_offset) = end_offset {
-                payloads.push(html_unescape(
-                    &rest[payload_start..payload_start + end_offset],
-                ));
-                rest = &rest[payload_start + end_offset + 1..];
-            } else {
-                break;
-            }
-        }
-        payloads
-    }
-
     fn snippet_around(value: &str, needle: &str) -> Option<String> {
         let lower = value.to_lowercase();
         let needle = needle.to_lowercase();
@@ -1416,85 +1891,110 @@ mod tests {
         Some(sanitize_inspection_text(&value[snippet_start..snippet_end]))
     }
 
-    fn json_fragments_from_payload(payload: &str) -> Vec<serde_json::Value> {
-        let mut values = Vec::new();
-        for (open, close) in [('[', ']'), ('{', '}')] {
-            let mut search_start = 0;
-            while let Some(relative_start) = payload[search_start..].find(open) {
-                let start = search_start + relative_start;
-                if let Some(end) = find_balanced_json_end(&payload[start..], open, close) {
-                    let fragment = &payload[start..start + end];
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(fragment) {
-                        values.push(value);
-                    }
-                    search_start = start + end;
+    fn reference_tokens(value: &str) -> Vec<String> {
+        let mut tokens = BTreeSet::new();
+        let chars = value.char_indices().collect::<Vec<_>>();
+        for (index, &(_, ch)) in chars.iter().enumerate() {
+            if ch != '$' {
+                continue;
+            }
+            let token_start = chars[index].0;
+            let mut token_end = token_start + ch.len_utf8();
+            for &(_, next) in chars.iter().skip(index + 1) {
+                if next.is_ascii_alphanumeric() || next == '_' || next == '-' {
+                    token_end += next.len_utf8();
                 } else {
                     break;
                 }
             }
+            if token_end > token_start + 1 {
+                tokens.insert(value[token_start..token_end].to_string());
+            }
         }
-        let nested = values
-            .iter()
-            .flat_map(json_fragments_from_json_strings)
-            .collect::<Vec<_>>();
-        values.extend(nested);
-        values
+        tokens.into_iter().collect()
     }
 
-    fn json_fragments_from_json_strings(value: &serde_json::Value) -> Vec<serde_json::Value> {
-        let mut values = Vec::new();
+    fn find_clip_object_for_diagnostic(
+        value: &serde_json::Value,
+        song_id: &str,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
         match value {
-            serde_json::Value::String(text) => {
-                let trimmed = text.trim();
-                if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        values.push(value);
+            serde_json::Value::Object(map) => {
+                if let Some(clip) = map.get("clip").and_then(|clip| clip.as_object()) {
+                    let id_matches = clip
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|id| id == song_id);
+                    let has_clip_shape = clip.contains_key("audio_url")
+                        || clip.contains_key("image_url")
+                        || clip.contains_key("image_large_url");
+                    let id_missing = clip.get("id").and_then(|value| value.as_str()).is_none();
+                    if id_matches || (id_missing && has_clip_shape) {
+                        return Some(clip.clone());
                     }
                 }
+                map.values()
+                    .find_map(|child| find_clip_object_for_diagnostic(child, song_id))
             }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    values.extend(json_fragments_from_json_strings(item));
-                }
-            }
-            serde_json::Value::Object(map) => {
-                for item in map.values() {
-                    values.extend(json_fragments_from_json_strings(item));
-                }
-            }
-            _ => {}
+            serde_json::Value::Array(items) => items
+                .iter()
+                .find_map(|item| find_clip_object_for_diagnostic(item, song_id)),
+            serde_json::Value::String(text) => json_fragments_from_payload(text)
+                .iter()
+                .find_map(|value| find_clip_object_for_diagnostic(value, song_id)),
+            _ => None,
         }
-        values
     }
 
-    fn find_balanced_json_end(value: &str, open: char, close: char) -> Option<usize> {
-        let mut depth = 0usize;
-        let mut in_string = false;
-        let mut escaped = false;
-        for (offset, ch) in value.char_indices() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-            match ch {
-                '"' => in_string = true,
-                ch if ch == open => depth += 1,
-                ch if ch == close => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return Some(offset + ch.len_utf8());
-                    }
-                }
-                _ => {}
+    fn clip_source_diagnostic(
+        source: String,
+        clip: &serde_json::Map<String, serde_json::Value>,
+        rsc_records: &BTreeMap<String, String>,
+    ) -> ExtractedClipSourceDiagnostic {
+        let mut raw_clip_metadata_fields = BTreeMap::new();
+        if let Some(metadata) = clip.get("metadata").and_then(|value| value.as_object()) {
+            for (key, value) in metadata {
+                let raw = value
+                    .as_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| value.to_string());
+                raw_clip_metadata_fields.insert(key.clone(), mask_sensitive_text(&raw));
             }
         }
-        None
+
+        let mut tokens = BTreeSet::new();
+        for value in raw_clip_metadata_fields.values() {
+            tokens.extend(reference_tokens(value));
+        }
+        let reference_tokens = tokens.into_iter().collect::<Vec<_>>();
+        let references = reference_tokens
+            .iter()
+            .map(|token| {
+                let record_id = token.trim_start_matches('$').to_string();
+                let record = rsc_records.get(&record_id);
+                ClipReferenceDiagnostic {
+                    token: token.clone(),
+                    record_id,
+                    exists: record.is_some(),
+                    referenced_record_length: record.map(|value| value.chars().count()),
+                    referenced_record_preview_start: record.map(|value| inspection_preview_start(value)),
+                    referenced_record_preview_end: record.map(|value| inspection_preview_end(value)),
+                }
+            })
+            .collect::<Vec<_>>();
+        let unresolved_references = references
+            .iter()
+            .filter(|reference| !reference.exists)
+            .map(|reference| reference.token.clone())
+            .collect();
+
+        ExtractedClipSourceDiagnostic {
+            source,
+            raw_clip_metadata_fields,
+            reference_tokens,
+            references,
+            unresolved_references,
+        }
     }
 
     fn inspect_next_payloads(
@@ -1529,8 +2029,11 @@ mod tests {
                 }
                 NextPayloadSummary {
                     index,
-                    char_length: payload.len(),
+                    char_length: payload.chars().count(),
                     summary: sanitize_inspection_text(&payload),
+                    preview_start: inspection_preview_start(&payload),
+                    preview_end: inspection_preview_end(&payload),
+                    decoded_payload: mask_sensitive_text(&payload),
                     matches,
                     decoded_json_fragment_count: json_fragments.len(),
                 }
@@ -1601,7 +2104,7 @@ mod tests {
         http_status: u16,
         html: &str,
     ) -> SunoMetadataInspectionReport {
-        let targets = [
+        let targets = vec![
             "lyrics",
             "prompt",
             "style",
@@ -1609,12 +2112,19 @@ mod tests {
             "title",
             "audio_url",
             "image_url",
-            "daf62c51",
+            id,
         ];
         let json_values = json_looking_script_values(html);
         let mut recursive_keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut candidate_values: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for value in &json_values {
+        let mut extracted_clip = None;
+        let mut extracted_clip_source = None;
+        for (index, value) in json_values.iter().enumerate() {
+            if extracted_clip_source.is_none() {
+                if let Some(clip) = find_clip_object_for_diagnostic(value, id) {
+                    extracted_clip_source = Some((format!("json_script[{index}]"), clip));
+                }
+            }
             collect_recursive_key_paths(
                 value,
                 "",
@@ -1625,20 +2135,94 @@ mod tests {
         }
         let next_payloads =
             inspect_next_payloads(html, &targets, &mut recursive_keys, &mut candidate_values);
+        let stream_text_chunks = extract_next_f_payloads(html)
+            .iter()
+            .flat_map(|payload| stream_text_chunks_from_payload(payload))
+            .collect::<Vec<_>>();
+        let stream_texts = stream_text_chunks
+            .iter()
+            .enumerate()
+            .map(|(index, text)| StreamTextSummary {
+                index,
+                char_length: text.chars().count(),
+                preview_start: inspection_preview_start(text),
+                preview_end: inspection_preview_end(text),
+            })
+            .collect::<Vec<_>>();
+        let rsc_record_map = parse_rsc_records_from_chunks(&stream_text_chunks);
+        let rsc_record_ids = rsc_record_map.keys().cloned().collect::<Vec<_>>();
+        let rsc_records = rsc_record_map
+            .iter()
+            .map(|(record_id, payload)| RscRecordSummary {
+                record_id: record_id.clone(),
+                char_length: payload.chars().count(),
+                preview_start: inspection_preview_start(payload),
+                preview_end: inspection_preview_end(payload),
+            })
+            .collect::<Vec<_>>();
+        if extracted_clip.is_none() {
+            for value in &json_values {
+                if let Some(metadata) = clip_metadata_from_value_with_records(value, id, &rsc_record_map) {
+                    extracted_clip = Some(metadata);
+                    break;
+                }
+            }
+        }
+        if extracted_clip.is_none() {
+            for (_payload_index, payload) in extract_next_f_payloads(html).into_iter().enumerate() {
+                for value in json_fragments_from_payload(&payload) {
+                    if let Some(metadata) =
+                        clip_metadata_from_value_with_records(&value, id, &rsc_record_map)
+                    {
+                        extracted_clip = Some(metadata);
+                        break;
+                    }
+                }
+                if extracted_clip.is_some() {
+                    break;
+                }
+            }
+        }
+        if extracted_clip_source.is_none() {
+            for (payload_index, payload) in extract_next_f_payloads(html).into_iter().enumerate() {
+                for value in json_fragments_from_payload(&payload) {
+                    if let Some(clip) = find_clip_object_for_diagnostic(&value, id) {
+                        extracted_clip_source = Some((format!("next_payload[{payload_index}]"), clip));
+                        break;
+                    }
+                }
+                if extracted_clip_source.is_some() {
+                    break;
+                }
+            }
+        }
+        if extracted_clip_source.is_none() {
+            for (record_id, payload) in &rsc_record_map {
+                for value in json_fragments_from_payload(payload) {
+                    if let Some(clip) = find_clip_object_for_diagnostic(&value, id) {
+                        extracted_clip_source = Some((format!("rsc_record[{record_id}]"), clip));
+                        break;
+                    }
+                }
+                if extracted_clip_source.is_some() {
+                    break;
+                }
+            }
+        }
 
         for meta in inspect_meta_tags(html) {
             let lower_key = meta.name_or_property.to_lowercase();
-            for target in targets {
-                if lower_key.contains(target)
-                    || (target == "image_url" && lower_key.contains("image"))
-                    || (target == "title" && lower_key.contains("title"))
+            for target in &targets {
+                if lower_key.contains(*target)
+                    || (*target == "image_url" && lower_key.contains("image"))
+                    || (*target == "title" && lower_key.contains("title"))
                 {
                     candidate_values
-                        .entry(target.to_string())
+                        .entry((*target).to_string())
                         .or_default()
                         .insert(meta.content.clone());
                     recursive_keys
-                        .entry(target.to_string())
+                        .entry((*target).to_string())
                         .or_default()
                         .insert(format!("meta:{}", meta.name_or_property));
                 }
@@ -1664,7 +2248,34 @@ mod tests {
             meta_tags: inspect_meta_tags(html),
             json_script_count: json_values.len(),
             next_payload_count: next_payloads.len(),
+            push_count: next_payloads.len(),
+            decoded_payload_total_length: next_payloads
+                .iter()
+                .map(|payload| payload.char_length)
+                .sum(),
             next_payloads,
+            stream_text_count: stream_texts.len(),
+            stream_text_total_length: stream_texts
+                .iter()
+                .map(|stream_text| stream_text.char_length)
+                .sum(),
+            stream_texts,
+            rsc_record_count: rsc_record_ids.len(),
+            rsc_record_ids,
+            rsc_records,
+            extracted_clip: extracted_clip.map(|metadata| ExtractedClipDiagnostic {
+                title: metadata.title,
+                audio_url: metadata.audio_url,
+                image_url: metadata.image_url,
+                image_large_url: metadata.image_large_url,
+                metadata_tags: metadata.style,
+                metadata_prompt_length: metadata.prompt.as_deref().map(str::len).unwrap_or(0),
+                metadata_prompt_preview: metadata
+                    .prompt
+                    .map(|prompt| sanitize_inspection_text(&prompt)),
+            }),
+            extracted_clip_source: extracted_clip_source
+                .map(|(source, clip)| clip_source_diagnostic(source, &clip, &rsc_record_map)),
             recursive_keys,
             candidate_values,
         }
@@ -1690,8 +2301,8 @@ mod tests {
     #[test]
     #[ignore]
     fn inspect_suno_metadata_sources_ignored() {
-        let url =
-            env::var("SUNO_MV_INSPECT_URL").unwrap_or_else(|_| DEFAULT_INSPECT_URL.to_string());
+        let url = env::var("SUNO_MV_INSPECT_URL")
+            .expect("SUNO_MV_INSPECT_URL should be set to a Suno song URL");
         let id = extract_suno_id(&url).expect("SUNO_MV_INSPECT_URL should contain a Suno id");
         let agent = ureq::AgentBuilder::new().build();
         let response = agent.get(&url).call().expect("failed to fetch Suno page");
@@ -1770,10 +2381,10 @@ mod tests {
                 <meta property="og:title" content="Meta title">
                 <meta property="og:image" content="https://cdn.test/image.jpeg">
                 <script id="__NEXT_DATA__" type="application/json">
-                {"props":{"clip":{"title":"JSON title","lyrics":"words","prompt":"make it bright","style":"pop","audio_url":"https://cdn.test/audio.mp3","image_url":"https://cdn.test/cover.jpeg","tags":["tag-a"]}}}
+                {"props":{"clip":{"id":"id","title":"JSON title","audio_url":"https://cdn.test/audio.mp3","image_url":"https://cdn.test/cover.jpeg","metadata":{"prompt":"[Verse]\nwords\nmore words","tags":["pop","bright"]}}}}
                 </script>
                 <script>self.__next_f.push(["payload"])</script>
-                <script>self.__next_f.push([1,"{\"title\":\"RSC title\",\"prompt\":\"RSC prompt\",\"audio_url\":\"https://cdn.test/rsc.mp3\",\"id\":\"daf62c51\"}"])</script>
+                <script>self.__next_f.push([1,"{\"clip\":{\"id\":\"id\",\"title\":\"RSC title\",\"audio_url\":\"https://cdn.test/rsc.mp3\",\"image_large_url\":\"https://cdn.test/rsc-large.jpeg\",\"metadata\":{\"prompt\":\"RSC prompt\",\"tags\":[\"rsc-tag\"]}}}"])</script>
             </head></html>
         "#;
 
@@ -1787,19 +2398,28 @@ mod tests {
         assert!(report.next_payloads.iter().any(|payload| payload
             .matches
             .iter()
-            .any(|found| found.target == "daf62c51")));
-        assert!(report
-            .candidate_values
-            .get("lyrics")
-            .is_some_and(|values| values.iter().any(|value| value == "words")));
+            .any(|found| found.target == "id")));
         assert!(report
             .candidate_values
             .get("prompt")
-            .is_some_and(|values| values.iter().any(|value| value == "make it bright")));
+            .is_some_and(|values| values.iter().any(|value| value.contains("[Verse]"))));
         assert!(report
             .candidate_values
-            .get("style")
-            .is_some_and(|values| values.iter().any(|value| value == "pop")));
+            .get("title")
+            .is_some_and(|values| values.iter().any(|value| value == "JSON title")));
+        assert!(report
+            .candidate_values
+            .get("audio_url")
+            .is_some_and(|values| values
+                .iter()
+                .any(|value| value == "https://cdn.test/audio.mp3")));
+        assert_eq!(
+            report
+                .extracted_clip
+                .as_ref()
+                .and_then(|clip| clip.metadata_tags.as_ref()),
+            Some(&"pop, bright".to_string())
+        );
     }
 
     #[test]
@@ -1874,11 +2494,14 @@ mod tests {
             {
                 "props": {
                     "clip": {
+                        "id": "song-id",
                         "title": "Page title",
                         "audio_url": "https://cdn.suno.test/audio.mp3",
                         "image_large_url": "https://cdn.suno.test/large.jpeg",
-                        "lyrics": "la la",
-                        "style_prompt": "cinematic pop"
+                        "metadata": {
+                            "prompt": "[Verse 1]\nline one\nline two",
+                            "tags": ["cinematic", "pop"]
+                        }
                     }
                 }
             }
@@ -1898,8 +2521,9 @@ mod tests {
             metadata.image_large_url,
             Some("https://cdn.suno.test/large.jpeg".to_string())
         );
-        assert_eq!(metadata.lyrics, Some("la la".to_string()));
-        assert_eq!(metadata.style, Some("cinematic pop".to_string()));
+        assert_eq!(metadata.prompt, Some("[Verse 1]\nline one\nline two".to_string()));
+        assert_eq!(metadata.lyrics, Some("[Verse 1]\nline one\nline two".to_string()));
+        assert_eq!(metadata.style, Some("cinematic, pop".to_string()));
     }
 
     #[test]
