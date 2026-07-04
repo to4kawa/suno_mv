@@ -121,7 +121,7 @@ window.onload = () => {
             .map(([label, value]) => `${label}: ${value}`)
             .join("\n") || "No metadata loaded.";
         lyricsOutput.textContent = metadata.lyrics || "No lyrics metadata loaded.";
-        promptOutput.textContent = [metadata.style, metadata.prompt].filter(Boolean).join("\n\n") || "No prompt metadata loaded.";
+        promptOutput.textContent = metadata.style || "No prompt metadata loaded.";
     };
 
     const getSettingsFromUi = () => ({
