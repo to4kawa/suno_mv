@@ -1252,6 +1252,224 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const DEFAULT_INSPECT_URL: &str = "https://suno.com/song/daf62c51-6b0a-4dd2-bfa7-99795df4720c";
+
+    #[derive(Debug, Serialize)]
+    struct InspectMetaTag {
+        name_or_property: String,
+        content: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct SunoMetadataInspectionReport {
+        url: String,
+        id: String,
+        http_status: u16,
+        html_length: usize,
+        has_next_data: bool,
+        has_next_f_payload: bool,
+        meta_tags: Vec<InspectMetaTag>,
+        json_script_count: usize,
+        next_payload_count: usize,
+        recursive_keys: BTreeMap<String, Vec<String>>,
+        candidate_values: BTreeMap<String, Vec<String>>,
+    }
+
+    fn sanitize_inspection_text(value: &str) -> String {
+        let mut sanitized = value.to_string();
+        for marker in [
+            "authorization",
+            "browser-token",
+            "device-id",
+            "cookie",
+            "set-cookie",
+        ] {
+            let lower = sanitized.to_lowercase();
+            let mut search_start = 0;
+            while let Some(found) = lower[search_start..].find(marker) {
+                let start = search_start + found;
+                let value_start = sanitized[start..]
+                    .find([':', '=', '"'])
+                    .map(|offset| start + offset + 1)
+                    .unwrap_or(start + marker.len());
+                let value_end = sanitized[value_start..]
+                    .find([',', ';', '\n', '\r', '"'])
+                    .map(|offset| value_start + offset)
+                    .unwrap_or_else(|| sanitized.len().min(value_start + 80));
+                sanitized.replace_range(value_start..value_end, " ***");
+                search_start = (value_start + 4).min(sanitized.len());
+            }
+        }
+        sanitized.chars().take(500).collect()
+    }
+
+    fn inspect_meta_tags(html: &str) -> Vec<InspectMetaTag> {
+        let mut tags = Vec::new();
+        let mut rest = html;
+        while let Some(start) = rest.find("<meta") {
+            rest = &rest[start..];
+            let Some(end) = rest.find('>') else {
+                break;
+            };
+            let tag = &rest[..end + 1];
+            let name_or_property = extract_attr(tag, "property")
+                .or_else(|| extract_attr(tag, "name"))
+                .map(html_unescape);
+            let content = extract_attr(tag, "content").map(html_unescape);
+            if let (Some(name_or_property), Some(content)) = (name_or_property, content) {
+                tags.push(InspectMetaTag {
+                    name_or_property: sanitize_inspection_text(&name_or_property),
+                    content: sanitize_inspection_text(&content),
+                });
+            }
+            rest = &rest[end + 1..];
+        }
+        tags
+    }
+
+    fn json_looking_script_values(html: &str) -> Vec<serde_json::Value> {
+        script_contents(html)
+            .into_iter()
+            .filter_map(|script| {
+                let trimmed = script.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                    serde_json::from_str::<serde_json::Value>(trimmed).ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn collect_recursive_key_paths(
+        value: &serde_json::Value,
+        path: &str,
+        targets: &[&str],
+        keys: &mut BTreeMap<String, BTreeSet<String>>,
+        values: &mut BTreeMap<String, BTreeSet<String>>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    let child_path = if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    for target in targets {
+                        if key.eq_ignore_ascii_case(target) || key.to_lowercase().contains(target) {
+                            keys.entry((*target).to_string())
+                                .or_default()
+                                .insert(child_path.clone());
+                            if let Some(value) = child.as_str() {
+                                if !value.trim().is_empty() {
+                                    values
+                                        .entry((*target).to_string())
+                                        .or_default()
+                                        .insert(sanitize_inspection_text(value));
+                                }
+                            }
+                        }
+                    }
+                    collect_recursive_key_paths(child, &child_path, targets, keys, values);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    let child_path = format!("{path}[{index}]");
+                    collect_recursive_key_paths(child, &child_path, targets, keys, values);
+                }
+            }
+            serde_json::Value::String(value) => {
+                let lower = value.to_lowercase();
+                for target in targets {
+                    if lower.contains(target) {
+                        keys.entry((*target).to_string())
+                            .or_default()
+                            .insert(path.to_string());
+                        values
+                            .entry((*target).to_string())
+                            .or_default()
+                            .insert(sanitize_inspection_text(value));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn inspect_suno_metadata_html(
+        url: &str,
+        id: &str,
+        http_status: u16,
+        html: &str,
+    ) -> SunoMetadataInspectionReport {
+        let targets = [
+            "lyrics",
+            "prompt",
+            "style",
+            "tags",
+            "title",
+            "audio_url",
+            "image_url",
+        ];
+        let json_values = json_looking_script_values(html);
+        let mut recursive_keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut candidate_values: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for value in &json_values {
+            collect_recursive_key_paths(
+                value,
+                "",
+                &targets,
+                &mut recursive_keys,
+                &mut candidate_values,
+            );
+        }
+
+        for meta in inspect_meta_tags(html) {
+            let lower_key = meta.name_or_property.to_lowercase();
+            for target in targets {
+                if lower_key.contains(target)
+                    || (target == "image_url" && lower_key.contains("image"))
+                    || (target == "title" && lower_key.contains("title"))
+                {
+                    candidate_values
+                        .entry(target.to_string())
+                        .or_default()
+                        .insert(meta.content.clone());
+                    recursive_keys
+                        .entry(target.to_string())
+                        .or_default()
+                        .insert(format!("meta:{}", meta.name_or_property));
+                }
+            }
+        }
+
+        let recursive_keys = recursive_keys
+            .into_iter()
+            .map(|(key, paths)| (key, paths.into_iter().collect()))
+            .collect();
+        let candidate_values = candidate_values
+            .into_iter()
+            .map(|(key, values)| (key, values.into_iter().collect()))
+            .collect();
+
+        SunoMetadataInspectionReport {
+            url: url.to_string(),
+            id: id.to_string(),
+            http_status,
+            html_length: html.len(),
+            has_next_data: html.contains("__NEXT_DATA__"),
+            has_next_f_payload: html.contains("self.__next_f.push"),
+            meta_tags: inspect_meta_tags(html),
+            json_script_count: json_values.len(),
+            next_payload_count: html.matches("self.__next_f.push").count(),
+            recursive_keys,
+            candidate_values,
+        }
+    }
 
     #[test]
     fn extracts_suno_id() {
@@ -1268,6 +1486,115 @@ mod tests {
             Some("123e4567-e89b-12d3-a456-426614174000".to_string())
         );
         assert_eq!(extract_suno_id("https://suno.com/"), None);
+    }
+
+    #[test]
+    #[ignore]
+    fn inspect_suno_metadata_sources_ignored() {
+        let url =
+            env::var("SUNO_MV_INSPECT_URL").unwrap_or_else(|_| DEFAULT_INSPECT_URL.to_string());
+        let id = extract_suno_id(&url).expect("SUNO_MV_INSPECT_URL should contain a Suno id");
+        let agent = ureq::AgentBuilder::new().build();
+        let response = agent.get(&url).call().expect("failed to fetch Suno page");
+        let http_status = response.status();
+        let mut html = String::new();
+        response
+            .into_reader()
+            .read_to_string(&mut html)
+            .expect("failed to read Suno page response");
+        let report = inspect_suno_metadata_html(&url, &id, http_status, &html);
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri should have a parent directory");
+        let debug_dir = repo_root.join("debug");
+        fs::create_dir_all(&debug_dir).expect("failed to create debug dir");
+        let report_path = debug_dir.join(format!("suno_metadata_inspection_{id}.json"));
+        let report_json =
+            serde_json::to_string_pretty(&report).expect("failed to serialize inspection report");
+        fs::write(&report_path, report_json).expect("failed to write inspection report");
+
+        println!("wrote {}", report_path.display());
+        println!(
+            "title candidates: {}",
+            report
+                .candidate_values
+                .get("title")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+        println!(
+            "lyrics candidates: {}",
+            report
+                .candidate_values
+                .get("lyrics")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+        println!(
+            "prompt candidates: {}",
+            report
+                .candidate_values
+                .get("prompt")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+        println!(
+            "style candidates: {}",
+            report
+                .candidate_values
+                .get("style")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+        println!(
+            "image candidates: {}",
+            report
+                .candidate_values
+                .get("image_url")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+        println!(
+            "audio candidates: {}",
+            report
+                .candidate_values
+                .get("audio_url")
+                .map(|values| values.len())
+                .unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn inspects_metadata_report_from_html_without_network() {
+        let html = r#"
+            <html><head>
+                <meta property="og:title" content="Meta title">
+                <meta property="og:image" content="https://cdn.test/image.jpeg">
+                <script id="__NEXT_DATA__" type="application/json">
+                {"props":{"clip":{"title":"JSON title","lyrics":"words","prompt":"make it bright","style":"pop","audio_url":"https://cdn.test/audio.mp3","image_url":"https://cdn.test/cover.jpeg","tags":["tag-a"]}}}
+                </script>
+                <script>self.__next_f.push(["payload"])</script>
+            </head></html>
+        "#;
+
+        let report = inspect_suno_metadata_html("https://suno.com/s/id", "id", 200, html);
+
+        assert_eq!(report.http_status, 200);
+        assert!(report.has_next_data);
+        assert!(report.has_next_f_payload);
+        assert_eq!(report.json_script_count, 1);
+        assert!(report
+            .candidate_values
+            .get("lyrics")
+            .is_some_and(|values| values.iter().any(|value| value == "words")));
+        assert!(report
+            .candidate_values
+            .get("prompt")
+            .is_some_and(|values| values.iter().any(|value| value == "make it bright")));
+        assert!(report
+            .candidate_values
+            .get("style")
+            .is_some_and(|values| values.iter().any(|value| value == "pop")));
     }
 
     #[test]

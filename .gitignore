@@ -21,3 +21,6 @@ build/
 *.deb
 *.rpm
 *.AppImage
+
+# Local diagnostics
+debug/*.json
