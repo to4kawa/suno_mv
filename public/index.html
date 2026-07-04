@@ -4,22 +4,26 @@
     <meta charset="UTF-8" >
     <title>Suno MV App</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; color: #222; }
-        button, input, select { font: inherit; }
+        body { font-family: sans-serif; padding: 20px; color: #222; max-width: 980px; margin: 0 auto; }
+        button, input, select, textarea { font: inherit; }
         button { margin: 4px 4px 4px 0; }
+        input[type="text"], input[type="password"], input[type="number"], textarea { box-sizing: border-box; width: 100%; }
+        .main-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+        #status-line { margin: 10px 0; font-weight: 700; }
+        #output-result { margin: 6px 0 14px; word-break: break-all; }
         #drop-area {
-            width: 100%; height: 200px; border: 2px dashed #aaa;
+            width: 100%; min-height: 160px; border: 2px dashed #aaa;
             display: flex; justify-content: center; align-items: center;
-            margin-bottom: 10px;
+            margin: 10px 0;
         }
         #preview-img {
-            max-width: 100%; max-height: 150px;
+            max-width: 100%; max-height: 220px;
             display: block; margin-top: 10px;
         }
         details {
             border: 1px solid #d4d4d4;
             padding: 12px;
-            margin: 14px 0;
+            margin: 12px 0;
         }
         summary { cursor: pointer; font-weight: 700; }
         fieldset {
@@ -29,20 +33,29 @@
         }
         label { display: block; margin: 8px 0; }
         .settings-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        .settings-row input[type="text"] { flex: 1 1 320px; min-width: 220px; }
-        #ffmpeg-status { white-space: pre-wrap; margin-top: 8px; }
+        .settings-row input[type="text"], .settings-row input[type="password"] { flex: 1 1 320px; min-width: 220px; }
+        .hint { color: #666; font-size: 0.92rem; }
+        .panel-output { white-space: pre-wrap; word-break: break-word; }
+        #log { max-height: 260px; overflow: auto; }
     </style>
 </head>
 <body>
     <h1>Suno MV Maker</h1>
-    
-    <input id="url-input" type="text" placeholder="Paste Suno URL here" style="width: 100%;" >
-    <button id="preview-btn">Preview</button>
-    <button id="generate-btn">Generate MP4</button>
 
-    <details id="settings-panel">
-        <summary>Settings</summary>
+    <label for="url-input">Suno URL</label>
+    <input id="url-input" type="text" placeholder="Paste Suno URL here" >
+    <div class="main-actions">
+        <button id="preview-btn">Preview</button>
+        <button id="generate-btn">Generate MP4</button>
+    </div>
+    <div id="status-line">Idle</div>
+    <div id="output-result"></div>
 
+    <div id="drop-area">Drag and drop cover image here</div>
+    <img id="preview-img" src="" alt="Cover Preview" >
+
+    <details id="render-settings-panel" open>
+        <summary>Render Settings</summary>
         <fieldset>
             <legend>Output</legend>
             <label for="save-folder-input">Save folder</label>
@@ -65,7 +78,7 @@
                 <button id="choose-ffmpeg-btn" type="button">Choose ffmpeg.exe</button>
                 <button id="test-ffmpeg-btn" type="button">Test FFmpeg</button>
             </div>
-            <div id="ffmpeg-status">Status: Not tested</div>
+            <div id="ffmpeg-status" class="panel-output">Status: Not tested</div>
         </fieldset>
 
         <fieldset>
@@ -82,11 +95,59 @@
                 <option value="high">High</option>
             </select>
         </fieldset>
+
+        <fieldset>
+            <legend>Render</legend>
+            <label for="resolution-input">Resolution</label>
+            <select id="resolution-input">
+                <option value="1280x720">1280x720</option>
+                <option value="1920x1080">1920x1080</option>
+                <option value="1080x1080">1080x1080</option>
+            </select>
+
+            <label for="visualizer-input">Visualizer</label>
+            <select id="visualizer-input">
+                <option value="combined">combined</option>
+                <option value="separate">separate</option>
+                <option value="single">single</option>
+            </select>
+        </fieldset>
     </details>
 
-    <div id="drop-area">Drag and drop cover image here</div>
-    <img id="preview-img" src="" alt="Cover Preview" >
-    <pre id="log"></pre>
+    <details id="suno-api-settings-panel">
+        <summary>Suno API Settings</summary>
+        <p class="hint">Suno API values are optional and stored locally in app settings.</p>
+        <label for="suno-authorization-input">authorization</label>
+        <input id="suno-authorization-input" type="password" autocomplete="off" >
+        <label for="suno-browser-token-input">browser-token</label>
+        <input id="suno-browser-token-input" type="password" autocomplete="off" >
+        <label for="suno-device-id-input">device-id</label>
+        <input id="suno-device-id-input" type="password" autocomplete="off" >
+        <label for="suno-max-pages-input">max pages</label>
+        <input id="suno-max-pages-input" type="number" min="1" max="1000" value="100" >
+        <button id="test-metadata-btn" type="button">Test metadata fetch</button>
+        <div id="suno-api-status" class="panel-output">Not tested</div>
+    </details>
+
+    <details id="metadata-panel">
+        <summary>Metadata</summary>
+        <div id="metadata-output" class="panel-output">No metadata loaded.</div>
+    </details>
+
+    <details id="lyrics-panel">
+        <summary>Lyrics</summary>
+        <div id="lyrics-output" class="panel-output">No lyrics metadata loaded.</div>
+    </details>
+
+    <details id="prompt-panel">
+        <summary>Style / Prompt</summary>
+        <div id="prompt-output" class="panel-output">No prompt metadata loaded.</div>
+    </details>
+
+    <details id="log-panel">
+        <summary>Log</summary>
+        <pre id="log"></pre>
+    </details>
 
     <script src="renderer.js"></script>
 </body>
