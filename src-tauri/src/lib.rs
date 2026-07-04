@@ -1263,6 +1263,22 @@ mod tests {
     }
 
     #[derive(Debug, Serialize)]
+    struct NextPayloadMatch {
+        target: String,
+        index: usize,
+        snippet: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct NextPayloadSummary {
+        index: usize,
+        char_length: usize,
+        summary: String,
+        matches: Vec<NextPayloadMatch>,
+        decoded_json_fragment_count: usize,
+    }
+
+    #[derive(Debug, Serialize)]
     struct SunoMetadataInspectionReport {
         url: String,
         id: String,
@@ -1273,6 +1289,7 @@ mod tests {
         meta_tags: Vec<InspectMetaTag>,
         json_script_count: usize,
         next_payload_count: usize,
+        next_payloads: Vec<NextPayloadSummary>,
         recursive_keys: BTreeMap<String, Vec<String>>,
         candidate_values: BTreeMap<String, Vec<String>>,
     }
@@ -1338,6 +1355,184 @@ mod tests {
                     serde_json::from_str::<serde_json::Value>(trimmed).ok()
                 } else {
                     None
+                }
+            })
+            .collect()
+    }
+
+    fn extract_next_f_payloads(html: &str) -> Vec<String> {
+        let marker = "self.__next_f.push(";
+        let mut payloads = Vec::new();
+        let mut rest = html;
+        while let Some(start) = rest.find(marker) {
+            let payload_start = start + marker.len();
+            let chars: Vec<(usize, char)> = rest[payload_start..].char_indices().collect();
+            let mut depth = 1usize;
+            let mut in_string: Option<char> = None;
+            let mut escaped = false;
+            let mut end_offset = None;
+            for (offset, ch) in chars {
+                if let Some(quote) = in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == quote {
+                        in_string = None;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' | '\'' | '`' => in_string = Some(ch),
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end_offset = Some(offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(end_offset) = end_offset {
+                payloads.push(html_unescape(
+                    &rest[payload_start..payload_start + end_offset],
+                ));
+                rest = &rest[payload_start + end_offset + 1..];
+            } else {
+                break;
+            }
+        }
+        payloads
+    }
+
+    fn snippet_around(value: &str, needle: &str) -> Option<String> {
+        let lower = value.to_lowercase();
+        let needle = needle.to_lowercase();
+        let start = lower.find(&needle)?;
+        let snippet_start = start.saturating_sub(120);
+        let snippet_end = (start + needle.len() + 180).min(value.len());
+        Some(sanitize_inspection_text(&value[snippet_start..snippet_end]))
+    }
+
+    fn json_fragments_from_payload(payload: &str) -> Vec<serde_json::Value> {
+        let mut values = Vec::new();
+        for (open, close) in [('[', ']'), ('{', '}')] {
+            let mut search_start = 0;
+            while let Some(relative_start) = payload[search_start..].find(open) {
+                let start = search_start + relative_start;
+                if let Some(end) = find_balanced_json_end(&payload[start..], open, close) {
+                    let fragment = &payload[start..start + end];
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(fragment) {
+                        values.push(value);
+                    }
+                    search_start = start + end;
+                } else {
+                    break;
+                }
+            }
+        }
+        let nested = values
+            .iter()
+            .flat_map(json_fragments_from_json_strings)
+            .collect::<Vec<_>>();
+        values.extend(nested);
+        values
+    }
+
+    fn json_fragments_from_json_strings(value: &serde_json::Value) -> Vec<serde_json::Value> {
+        let mut values = Vec::new();
+        match value {
+            serde_json::Value::String(text) => {
+                let trimmed = text.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        values.push(value);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    values.extend(json_fragments_from_json_strings(item));
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for item in map.values() {
+                    values.extend(json_fragments_from_json_strings(item));
+                }
+            }
+            _ => {}
+        }
+        values
+    }
+
+    fn find_balanced_json_end(value: &str, open: char, close: char) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, ch) in value.char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                ch if ch == open => depth += 1,
+                ch if ch == close => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(offset + ch.len_utf8());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn inspect_next_payloads(
+        html: &str,
+        targets: &[&str],
+        recursive_keys: &mut BTreeMap<String, BTreeSet<String>>,
+        candidate_values: &mut BTreeMap<String, BTreeSet<String>>,
+    ) -> Vec<NextPayloadSummary> {
+        extract_next_f_payloads(html)
+            .into_iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                let matches = targets
+                    .iter()
+                    .filter_map(|target| {
+                        snippet_around(&payload, target).map(|snippet| NextPayloadMatch {
+                            target: (*target).to_string(),
+                            index,
+                            snippet,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let json_fragments = json_fragments_from_payload(&payload);
+                for value in &json_fragments {
+                    collect_recursive_key_paths(
+                        value,
+                        &format!("next_payload[{index}]"),
+                        targets,
+                        recursive_keys,
+                        candidate_values,
+                    );
+                }
+                NextPayloadSummary {
+                    index,
+                    char_length: payload.len(),
+                    summary: sanitize_inspection_text(&payload),
+                    matches,
+                    decoded_json_fragment_count: json_fragments.len(),
                 }
             })
             .collect()
@@ -1414,6 +1609,7 @@ mod tests {
             "title",
             "audio_url",
             "image_url",
+            "daf62c51",
         ];
         let json_values = json_looking_script_values(html);
         let mut recursive_keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -1427,6 +1623,8 @@ mod tests {
                 &mut candidate_values,
             );
         }
+        let next_payloads =
+            inspect_next_payloads(html, &targets, &mut recursive_keys, &mut candidate_values);
 
         for meta in inspect_meta_tags(html) {
             let lower_key = meta.name_or_property.to_lowercase();
@@ -1465,7 +1663,8 @@ mod tests {
             has_next_f_payload: html.contains("self.__next_f.push"),
             meta_tags: inspect_meta_tags(html),
             json_script_count: json_values.len(),
-            next_payload_count: html.matches("self.__next_f.push").count(),
+            next_payload_count: next_payloads.len(),
+            next_payloads,
             recursive_keys,
             candidate_values,
         }
@@ -1574,6 +1773,7 @@ mod tests {
                 {"props":{"clip":{"title":"JSON title","lyrics":"words","prompt":"make it bright","style":"pop","audio_url":"https://cdn.test/audio.mp3","image_url":"https://cdn.test/cover.jpeg","tags":["tag-a"]}}}
                 </script>
                 <script>self.__next_f.push(["payload"])</script>
+                <script>self.__next_f.push([1,"{\"title\":\"RSC title\",\"prompt\":\"RSC prompt\",\"audio_url\":\"https://cdn.test/rsc.mp3\",\"id\":\"daf62c51\"}"])</script>
             </head></html>
         "#;
 
@@ -1583,6 +1783,11 @@ mod tests {
         assert!(report.has_next_data);
         assert!(report.has_next_f_payload);
         assert_eq!(report.json_script_count, 1);
+        assert_eq!(report.next_payload_count, 2);
+        assert!(report.next_payloads.iter().any(|payload| payload
+            .matches
+            .iter()
+            .any(|found| found.target == "daf62c51")));
         assert!(report
             .candidate_values
             .get("lyrics")
