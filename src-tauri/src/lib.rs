@@ -101,17 +101,47 @@ fn safe_id(id: &str) -> String {
         .collect()
 }
 
-fn download_to_file(url: &str, path: &Path) -> Result<(), String> {
-    let response = ureq::get(url).call().map_err(|err| match err {
+fn describe_download_error(context: &str, url: &str, err: ureq::Error) -> String {
+    match err {
         ureq::Error::Status(code, response) => format!(
-            "Download failed for {url}: HTTP {code} {}",
+            "{context} failed for {url}: HTTP {code} {}",
             response.status_text()
         ),
-        other => format!("Download failed for {url}: {other}"),
-    })?;
+        other => format!("{context} failed for {url}: {other}"),
+    }
+}
+
+fn download_to_file(agent: &ureq::Agent, url: &str, path: &Path) -> Result<(), String> {
+    let response = agent
+        .get(url)
+        .call()
+        .map_err(|err| describe_download_error("Download", url, err))?;
     let mut reader = response.into_reader();
     let mut file = fs::File::create(path).map_err(|err| err.to_string())?;
     std::io::copy(&mut reader, &mut file).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn warm_up_direct_downloads(
+    agent: &ureq::Agent,
+    suno_url: &str,
+    cover_url: Option<&str>,
+) -> Result<(), String> {
+    agent
+        .get(suno_url)
+        .call()
+        .map(|_| ())
+        .map_err(|err| describe_download_error("Warm-up Suno page request", suno_url, err))?;
+
+    if let Some(cover_url) = cover_url {
+        agent
+            .get(cover_url)
+            .set("Range", "bytes=0-0")
+            .call()
+            .map(|_| ())
+            .map_err(|err| describe_download_error("Warm-up cover request", cover_url, err))?;
+    }
+
     Ok(())
 }
 
@@ -507,11 +537,25 @@ fn generate_mp4_inner(
     let cover_path = base_dir.join(format!("{id}.jpeg"));
     let output_path = base_dir.join(format!("{id}.mp4"));
 
-    download_to_file(&format!("https://cdn1.suno.ai/{id}.mp3"), &mp3_path)?;
+    let http_agent = ureq::AgentBuilder::new().build();
+    let mp3_url = format!("https://cdn1.suno.ai/{id}.mp3");
+    let cover_url = format!("https://cdn2.suno.ai/{id}.jpeg");
+    let has_frontend_cover = request.base64.is_some();
+    warm_up_direct_downloads(
+        &http_agent,
+        &request.url,
+        if has_frontend_cover {
+            None
+        } else {
+            Some(&cover_url)
+        },
+    )?;
+
+    download_to_file(&http_agent, &mp3_url, &mp3_path)?;
     if let Some(base64) = request.base64 {
         write_base64_image(&base64, &cover_path)?;
     } else {
-        download_to_file(&format!("https://cdn2.suno.ai/{id}.jpeg"), &cover_path)?;
+        download_to_file(&http_agent, &cover_url, &cover_path)?;
     }
 
     let args = build_ffmpeg_args(
