@@ -38,3 +38,16 @@ test('renderer passes metadata sources as optional generation fallbacks', () => 
   assert.match(source, /metadataImageUrl: metadataForRequest\?\.imageLargeUrl \|\| metadataForRequest\?\.imageUrl \|\| null/);
   assert.match(source, /outputFilename: metadataForRequest\?\.title \|\| null/);
 });
+
+test('renderer attempts metadata command even without Suno API settings', () => {
+  const source = fs.readFileSync('public/renderer.js', 'utf8');
+  assert.doesNotMatch(source, /metadata fetch skipped: Suno API settings are not configured/);
+  assert.match(source, /const result = await invoke\("fetch_suno_metadata", \{ url \}\)/);
+});
+
+test('renderer logs do not call cover CDN request warm-up', () => {
+  const renderer = fs.readFileSync('public/renderer.js', 'utf8');
+  const rust = fs.readFileSync('src-tauri/src/lib.rs', 'utf8');
+  assert.doesNotMatch(renderer, /Warm-up cover request|warm-up cover/i);
+  assert.doesNotMatch(rust, /Warm-up cover request|warm-up cover/i);
+});

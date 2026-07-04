@@ -121,7 +121,7 @@ window.onload = () => {
             .map(([label, value]) => `${label}: ${value}`)
             .join("\n") || "No metadata loaded.";
         lyricsOutput.textContent = metadata.lyrics || "No lyrics metadata loaded.";
-        promptOutput.textContent = metadata.prompt || "No prompt metadata loaded.";
+        promptOutput.textContent = [metadata.style, metadata.prompt].filter(Boolean).join("\n\n") || "No prompt metadata loaded.";
     };
 
     const getSettingsFromUi = () => ({
@@ -209,18 +209,13 @@ window.onload = () => {
 
     const fetchMetadata = async (url) => {
         const settings = getSettingsFromUi();
-        if (!hasSunoApiSettings(settings)) {
-            appendLog("metadata fetch skipped: Suno API settings are not configured");
-            setStatus("Preview OK");
-            sunoApiStatus.textContent = "Suno API settings are not configured.";
-            return null;
-        }
-
         await saveSettings();
         appendLog("metadata fetch start");
-        appendLog(`authorization ${maskSecret(settings.suno_authorization)}`);
-        appendLog(`browser-token ${maskSecret(settings.suno_browser_token)}`);
-        appendLog(`device-id ${maskSecret(settings.suno_device_id)}`);
+        if (hasSunoApiSettings(settings)) {
+            appendLog(`authorization ${maskSecret(settings.suno_authorization)}`);
+            appendLog(`browser-token ${maskSecret(settings.suno_browser_token)}`);
+            appendLog(`device-id ${maskSecret(settings.suno_device_id)}`);
+        }
         const result = await invoke("fetch_suno_metadata", { url });
         (result.logs || []).forEach(appendLog);
         sunoApiStatus.textContent = result.status || "Metadata fetch finished.";
