@@ -1,0 +1,100 @@
+version: 1
+
+component:
+  name: Browser Bridge
+
+ownership:
+
+  browser:
+    owns_authentication: true
+
+  desktop:
+    owns_authentication: false
+
+security:
+
+  browser_credentials:
+    receive: false
+    store: false
+    log: false
+
+  cookies:
+    receive: false
+    store: false
+    log: false
+
+  authorization_headers:
+    receive: false
+    store: false
+    log: false
+
+  google_credentials:
+    receive: false
+    store: false
+    log: false
+
+transport:
+
+  protocol: http
+
+  host: 127.0.0.1
+
+  port: dynamic
+
+  endpoint: /v1/result
+
+  method: POST
+
+  localhost_only: true
+
+  lifetime: one_shot
+
+authentication:
+
+  bearer_token:
+    generated_per_session: true
+
+  request_id:
+    generated_per_session: true
+
+validation:
+
+  max_body_mb: 2
+
+  max_timing_records: 5000
+
+lifecycle:
+
+  shutdown:
+
+    on_success: true
+
+    on_timeout: true
+
+    on_error: true
+
+development:
+
+  preserve_existing_functionality: true
+
+  isolated_module_first: true
+
+  review_before_integration: true
+
+testing:
+
+  regression_required: true
+
+  targeted_tests_preferred: true
+
+future_payloads:
+
+  - aligned_lyrics
+
+  - metadata
+
+  - assets
+
+  - account
+
+  - song

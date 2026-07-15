@@ -1,26 +1,78 @@
-\# AGENTS.md
+\# AGENTS
 
 
 
-\## Project
+\## Purpose
 
 
 
-Suno\_mv is a desktop application for generating music videos from Suno songs.
+This document defines how AI agents should work in this repository.
 
 
 
-The project consists of:
+Project contracts are defined under:
 
 
 
-\- Rust backend
+\- contracts/
 
-\- Tauri
 
-\- React frontend
 
-\- FFmpeg integration
+Architecture documents remain the source of truth.
+
+
+
+\---
+
+
+
+\## Workflow
+
+
+
+Before making any changes:
+
+
+
+1\. Read:
+
+&#x20;  - AGENTS.md
+
+&#x20;  - contracts/
+
+&#x20;  - docs/adr/
+
+&#x20;  - docs/architecture/
+
+&#x20;  - docs/protocol/
+
+&#x20;  - docs/implementation/
+
+&#x20;  - docs/reviews/ (if relevant)
+
+
+
+2\. Summarize your understanding.
+
+
+
+3\. Propose an implementation plan.
+
+
+
+4\. Wait for approval if architecture changes.
+
+
+
+5\. Implement in small reviewable commits.
+
+
+
+6\. Summarize completed work.
+
+
+
+7\. Recommend manual verification steps.
 
 
 
@@ -48,81 +100,11 @@ Avoid unrelated refactoring.
 
 
 
-For new architecture, prefer introducing isolated module skeletons before integrating them into the existing application.
+Introduce isolated module skeletons before integrating them into the application.
 
 
 
-Integrate new components only after their structure and interfaces have been reviewed.
-
-
-
-\---
-
-
-
-\## Security
-
-
-
-Never expose:
-
-
-
-\- browser cookies
-
-\- authentication tokens
-
-\- session values
-
-
-
-Browser authentication belongs to the browser.
-
-
-
-\---
-
-
-
-\## Architecture
-
-
-
-See:
-
-
-
-docs/architecture/
-
-docs/protocol/
-
-docs/adr/
-
-
-
-Architecture documents are the source of truth.
-
-
-
-\---
-
-
-
-\## Development Flow
-
-
-
-1\. Read docs/
-
-2\. Propose implementation plan
-
-3\. Wait for approval if architecture changes
-
-4\. Implement
-
-5\. Run tests
-
-6\. Summarize changes
+Integrate new components only after their interfaces have been reviewed.
 
 
 
@@ -138,7 +120,7 @@ Prefer pure functions.
 
 
 
-Separate protocol parsing.
+Separate protocol parsing from transport.
 
 
 
@@ -158,15 +140,7 @@ Avoid global mutable state.
 
 
 
-Prefer unit tests for protocol parsing.
-
-
-
-Do not remove existing functionality.
-
-
-
-Regression safety is important.
+Prefer targeted unit tests.
 
 
 
@@ -174,5 +148,29 @@ Do not automatically run long-running build or test commands unless explicitly r
 
 
 
-After implementation, summarize the recommended manual verification steps.
+Summarize recommended manual verification after implementation.
+
+
+
+\---
+
+
+
+\## Review
+
+
+
+If implementation conflicts with a contract or architecture document:
+
+
+
+Stop.
+
+
+
+Explain the conflict.
+
+
+
+Do not guess.
 
