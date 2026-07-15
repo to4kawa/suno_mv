@@ -1,4 +1,5 @@
 use super::protocol::{BridgePayload, BridgeProtocolError};
+use super::session::BridgeSession;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportConfig {
@@ -20,10 +21,10 @@ impl Default for TransportConfig {
 }
 
 pub trait BridgeTransport {
-    fn receive_once(&self, expected_request_id: &str) -> Result<BridgePayload, BridgeTransportError>;
+    fn receive_once(&self, session: &BridgeSession) -> Result<BridgePayload, BridgeTransportError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BridgeTransportError {
     NotImplemented,
     Protocol(BridgeProtocolError),
