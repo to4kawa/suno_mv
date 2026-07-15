@@ -19,6 +19,14 @@ pub struct BridgePayload {
 
 impl BridgePayload {
     pub fn validate(&self, expected_request_id: &str) -> Result<(), BridgeProtocolError> {
+        self.validate_with_limits(expected_request_id, MAX_TIMING_RECORDS)
+    }
+
+    pub fn validate_with_limits(
+        &self,
+        expected_request_id: &str,
+        max_timing_records: usize,
+    ) -> Result<(), BridgeProtocolError> {
         if self.protocol_version != PROTOCOL_VERSION {
             return Err(BridgeProtocolError::UnsupportedProtocolVersion {
                 actual: self.protocol_version,
@@ -46,10 +54,10 @@ impl BridgePayload {
             return Err(BridgeProtocolError::EmptyTimings);
         }
 
-        if self.timings.len() > MAX_TIMING_RECORDS {
+        if self.timings.len() > max_timing_records {
             return Err(BridgeProtocolError::TooManyTimingRecords {
                 actual: self.timings.len(),
-                max: MAX_TIMING_RECORDS,
+                max: max_timing_records,
             });
         }
 
