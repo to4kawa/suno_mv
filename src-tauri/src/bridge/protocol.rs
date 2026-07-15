@@ -4,7 +4,6 @@ use std::fmt;
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const PROVIDER_SUNO: &str = "suno";
-pub const PAYLOAD_TYPE_ALIGNED_LYRICS: &str = "aligned_lyrics";
 pub const MAX_TIMING_RECORDS: usize = 5000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,7 +12,7 @@ pub struct BridgePayload {
     pub request_id: String,
     pub provider: String,
     #[serde(rename = "type")]
-    pub payload_type: String,
+    pub payload_type: PayloadType,
     pub song_id: String,
     pub timings: Vec<AlignedLyricTiming>,
 }
@@ -39,12 +38,6 @@ impl BridgePayload {
             return Err(BridgeProtocolError::UnsupportedProvider(self.provider.clone()));
         }
 
-        if self.payload_type != PAYLOAD_TYPE_ALIGNED_LYRICS {
-            return Err(BridgeProtocolError::UnsupportedPayloadType(
-                self.payload_type.clone(),
-            ));
-        }
-
         if self.song_id.trim().is_empty() {
             return Err(BridgeProtocolError::MissingField("song_id"));
         }
@@ -68,10 +61,18 @@ impl BridgePayload {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadType {
+    AlignedLyrics,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AlignedLyricTiming {
     pub text: String,
+    #[serde(rename = "start_s")]
     pub start_seconds: f64,
+    #[serde(rename = "end_s")]
     pub end_seconds: f64,
 }
 
@@ -115,7 +116,6 @@ pub enum BridgeProtocolError {
     MissingField(&'static str),
     RequestIdMismatch,
     UnsupportedProvider(String),
-    UnsupportedPayloadType(String),
     EmptyTimings,
     TooManyTimingRecords { actual: usize, max: usize },
     InvalidTiming { index: usize, reason: &'static str },
@@ -134,9 +134,6 @@ impl fmt::Display for BridgeProtocolError {
             BridgeProtocolError::RequestIdMismatch => write!(f, "request_id does not match session"),
             BridgeProtocolError::UnsupportedProvider(provider) => {
                 write!(f, "unsupported provider {provider}")
-            }
-            BridgeProtocolError::UnsupportedPayloadType(payload_type) => {
-                write!(f, "unsupported payload type {payload_type}")
             }
             BridgeProtocolError::EmptyTimings => write!(f, "timings must not be empty"),
             BridgeProtocolError::TooManyTimingRecords { actual, max } => {
@@ -160,7 +157,7 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             request_id: "request-1".to_string(),
             provider: PROVIDER_SUNO.to_string(),
-            payload_type: PAYLOAD_TYPE_ALIGNED_LYRICS.to_string(),
+            payload_type: PayloadType::AlignedLyrics,
             song_id: "song-1".to_string(),
             timings: vec![AlignedLyricTiming {
                 text: "hello".to_string(),
