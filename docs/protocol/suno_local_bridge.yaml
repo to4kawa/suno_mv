@@ -1,0 +1,69 @@
+version: 1
+
+bridge:
+  host: 127.0.0.1
+  port: dynamic
+
+server:
+  lifetime: one-shot
+  timeout_seconds: 60
+
+authentication:
+  bearer_token: generated_per_request
+  request_id: generated_per_request
+
+security:
+  bind_localhost_only: true
+  accept_single_request: true
+  receive_browser_credentials: false
+  receive_cookie: false
+  receive_authorization: false
+
+request:
+
+  endpoint: /v1/result
+  method: POST
+
+payload:
+
+  provider: suno
+
+  supported_types:
+    - aligned_lyrics
+
+aligned_lyrics:
+
+  required:
+
+    - protocol_version
+    - request_id
+    - song_id
+    - timings
+
+timings:
+
+  item:
+
+    text: string
+    start_seconds: float
+    end_seconds: float
+
+limits:
+
+  max_body_mb: 2
+  max_timing_records: 5000
+
+shutdown:
+
+  on_success: true
+  on_timeout: true
+  on_error: true
+
+future:
+
+  supported_payloads:
+
+    - metadata
+    - assets
+    - account
+    - song
