@@ -46,6 +46,16 @@ fn valid_request() -> HttpRequestParts {
 }
 
 #[test]
+fn creates_internal_browser_bridge_with_session_and_default_transport_config() {
+    let browser_bridge = bridge::create_browser_bridge().expect("browser bridge");
+
+    assert!(!browser_bridge.session.request_id.is_empty());
+    assert!(!browser_bridge.session.bearer_token.is_empty());
+    assert_eq!(browser_bridge.transport_config.host, "127.0.0.1");
+    assert_eq!(browser_bridge.transport_config.timeout_seconds, 60);
+}
+
+#[test]
 fn validates_protocol_payload_shape() {
     assert_eq!(valid_payload().validate("request-1"), Ok(()));
 }
