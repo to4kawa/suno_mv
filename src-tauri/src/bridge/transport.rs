@@ -26,6 +26,9 @@ pub trait BridgeTransport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BridgeTransportError {
-    NotImplemented,
+    BindFailed(String),
+    Io(String),
     Protocol(BridgeProtocolError),
+    RequestRejected(String),
+    Timeout,
 }
