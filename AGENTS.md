@@ -48,6 +48,14 @@ Avoid unrelated refactoring.
 
 
 
+For new architecture, prefer introducing isolated module skeletons before integrating them into the existing application.
+
+
+
+Integrate new components only after their structure and interfaces have been reviewed.
+
+
+
 \---
 
 
@@ -159,4 +167,12 @@ Do not remove existing functionality.
 
 
 Regression safety is important.
+
+
+
+Do not automatically run long-running build or test commands unless explicitly requested.
+
+
+
+After implementation, summarize the recommended manual verification steps.
 
