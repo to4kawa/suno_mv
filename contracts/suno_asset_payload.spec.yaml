@@ -1,0 +1,85 @@
+version: 1
+
+component:
+  name: Suno Asset Payload
+
+purpose:
+  description: >-
+    Defines credential-free asset references sent from a browser-side Suno
+    adapter to the desktop application through Browser Bridge.
+
+transport:
+  bridge_contract: contracts/browser_bridge.spec.yaml
+  content_type: application/json
+
+security:
+  browser_credentials:
+    receive: false
+    store: false
+    log: false
+  raw_request_headers:
+    receive: false
+    store: false
+    log: false
+
+payload:
+  required:
+    request_id:
+      type: string
+      non_empty: true
+    song_id:
+      type: string
+      non_empty: true
+
+  optional:
+    audio:
+      type: object
+    cover:
+      type: object
+    video:
+      type: object
+
+asset:
+  optional:
+    url:
+      type: string
+    mime_type:
+      type: string
+    size_bytes:
+      type: integer
+      minimum: 0
+    width:
+      type: integer
+      minimum: 1
+    height:
+      type: integer
+      minimum: 1
+    source:
+      type: string
+    observed_on:
+      type: string
+
+selection:
+  audio_priority:
+    - normalized_metadata
+    - validated_fallback
+  cover_priority:
+    - custom_user_image
+    - image_large_url
+    - image_url
+    - application_fallback
+  video_priority:
+    - normalized_metadata
+    - absent
+
+validation:
+  allowed_schemes:
+    - https
+  reject_embedded_credentials: true
+  reject_local_file_urls_from_browser: true
+  max_url_chars: 4096
+
+failure_policy:
+  unavailable_audio: error
+  unavailable_cover: use_application_fallback
+  unavailable_video: continue_without_source_video

@@ -1,0 +1,97 @@
+version: 1
+
+component:
+  name: Suno Metadata Payload
+
+purpose:
+  description: >-
+    Defines credential-free normalized song metadata sent from a browser-side
+    Suno adapter to the desktop application through Browser Bridge.
+
+transport:
+  bridge_contract: contracts/browser_bridge.spec.yaml
+  content_type: application/json
+
+security:
+  forbidden_fields:
+    - cookie
+    - cookies
+    - authorization
+    - authorization_header
+    - browser_token
+    - device_id
+    - clerk_token
+    - session_token
+    - google_credentials
+
+payload:
+  required:
+    request_id:
+      type: string
+      non_empty: true
+    song:
+      type: object
+
+  song:
+    required:
+      id:
+        type: string
+        non_empty: true
+
+    optional:
+      title:
+        type: string
+      display_name:
+        type: string
+      created_at:
+        type: string
+      status:
+        type: string
+      duration_seconds:
+        type: number
+        minimum: 0
+      lyrics:
+        type: string
+      prompt:
+        type: string
+      style:
+        type: string
+      tags:
+        type: array
+        items: string
+      model:
+        type: object
+      source:
+        type: object
+
+  model:
+    optional:
+      label:
+        type: string
+      identifier:
+        type: string
+      observed_on:
+        type: string
+      verified:
+        type: boolean
+
+  source:
+    optional:
+      adapter:
+        type: string
+      observed_on:
+        type: string
+      page_url:
+        type: string
+      method:
+        type: string
+
+validation:
+  reject_unknown_credential_fields: true
+  max_payload_mb: 2
+  max_tags: 100
+  max_text_chars: 100000
+
+compatibility:
+  preserve_unknown_non_secret_fields: false
+  version_required: true
