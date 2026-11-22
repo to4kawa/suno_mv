@@ -14,6 +14,7 @@ from .inputs import load_gs, load_notes, load_spectrogram, notes_to_json  # noqa
 from .metrics import analyze_wav
 from .midi import write_midi
 from .melody import SCALES, make_classic_melody as make_long_melody, make_melody  # noqa: F401
+from .batch import parse_grid, run_batch
 from .pipeline import SeedBuilder, SeedConfig
 from .recipe import default_config, file_ref, verify, write_seed
 from .render import Note, write_wav
@@ -69,6 +70,25 @@ def cmd_long(a):
     side = write_seed(a.out, recipe)
     o = side["output"]
     print(f"notes={o['notes']} wrote {a.out} ({o['seconds']:.1f}s) + {pathlib.Path(a.out).with_suffix('.json').name}")
+
+
+def cmd_batch(a):
+    if a.recipe:
+        base = json.loads(pathlib.Path(a.recipe).read_text(encoding="utf-8"))
+    else:
+        base = {"input": {"kind": "drawn", "seed": a.input_seed},
+                "melody": {"kind": "generator", "style": a.style, "minutes": a.minutes, "seed": a.seed,
+                           "options": _melody_kw(a)},
+                "config": default_config(strength=a.strength, seed=a.seed), "gs": None, "channels": 1 if a.mono else 2}
+    weights = json.loads(pathlib.Path(a.weights).read_text(encoding="utf-8")) if a.weights else None
+    rows = run_batch(base, parse_grid(a.grid), a.out, keep=a.keep,
+                     group_by=a.group_by, weights=weights, max_candidates=a.max_candidates)
+    print(f"{len(rows)} candidates scored -> {pathlib.Path(a.out) / 'ranking.csv'}")
+    for r in rows:
+        if r["wav"]:
+            m = r["metrics"]
+            print(f"  [{r['group']}] #{r['rank']} score={r['score']:.3f} periodicity={m['periodicity']:.2f} "
+                  f"roughness={m['roughness']:.4f}  {r['wav']}")
 
 
 def cmd_tomidi(a):
@@ -140,6 +160,22 @@ def main(argv=None):
     an.add_argument("--notes", required=True)
     an.add_argument("--max-notes", type=int, default=64)
     an.set_defaults(fn=cmd_analyze)
+    bt = sp.add_parser("batch", help="render a grid of candidates, score them, keep the best per group")
+    melody_opts(bt)
+    bt.add_argument("--recipe", help="base recipe JSON (overrides the options below)")
+    bt.add_argument("--grid", action="append", metavar="PATH=V1,V2,...",
+                    help="e.g. --grid config.seed=0,1,2,3 --grid config.strength=0.3,0.5,0.7 (repeatable)")
+    bt.add_argument("--keep", type=int, default=3, help="candidates to keep (WAV+sidecar) per group")
+    bt.add_argument("--group-by", default="config.strength", help="rank inside groups of this grid path")
+    bt.add_argument("--weights", help="JSON with score weights (see batch.DEFAULT_WEIGHTS)")
+    bt.add_argument("--max-candidates", type=int, default=200)
+    bt.add_argument("--minutes", type=float, default=2.0)
+    bt.add_argument("--strength", type=float, default=0.5)
+    bt.add_argument("--seed", type=int, default=0, help="melody/config seed when not in the grid")
+    bt.add_argument("--input-seed", type=int, default=0, help="seed of the synthetic drawing")
+    bt.add_argument("--mono", action="store_true")
+    bt.add_argument("--out", required=True)
+    bt.set_defaults(fn=cmd_batch)
     vf = sp.add_parser("verify", help="check a seed.json: WAV unchanged, and the recipe rebuilds it bit-for-bit")
     vf.add_argument("--sidecar", required=True)
     vf.set_defaults(fn=cmd_verify)
