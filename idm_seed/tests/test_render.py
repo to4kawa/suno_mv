@@ -83,3 +83,13 @@ def test_novelty_filter_accepts_far_reference_and_exhausts_on_close_one():
     b2 = SeedBuilder(S, freqs, fs, SeedConfig(seed=3, max_similarity=0.3, max_retries=2), gs_spectrum=close)
     b2.melody(NOTES[:2])
     assert all((not ok) and att == 3 for _k, att, _s, ok in b2.novelty_log), b2.novelty_log
+
+
+def test_long_melody_generator_is_exact_and_deterministic():
+    from idm_seed.cli import make_long_melody
+    a, b = make_long_melody(10, 0), make_long_melody(10, 0)
+    assert [(n.start, n.dur, n.midi) for n in a] == [(n.start, n.dur, n.midi) for n in b]
+    assert max(n.start + n.dur for n in a) <= 600.0
+    assert max(n.start + n.dur for n in a) > 595.0        # fills the requested length
+    assert all(x.start <= y.start for x, y in zip(a, a[1:]))
+    assert make_long_melody(1, 0)[-1].start + make_long_melody(1, 0)[-1].dur <= 60.0

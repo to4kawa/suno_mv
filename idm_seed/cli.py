@@ -41,6 +41,36 @@ def load_gs(path, n_bins):
 
 
 DEMO_MELODY = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]
+PENTA = [57, 60, 62, 64, 67, 69, 72]  # A minor pentatonic-ish, A3..C5
+
+
+def make_long_melody(minutes, seed=0, beat=0.5):
+    """Seeded phrase-structured melody (sections repeat, so Cover has a skeleton to follow).
+    Length is exact to the last note: the last note ends at or just before `minutes`."""
+    rng = np.random.default_rng(seed)
+
+    def phrase():
+        pos, out = 0, []
+        while pos < 8:
+            d = float(rng.choice([0.5, 1.0, 1.0, 2.0]))
+            d = min(d, 8 - pos)
+            out.append((pos, d, int(PENTA[int(rng.integers(0, len(PENTA)))]) if rng.random() > 0.12 else None))
+            pos += d
+        return out
+
+    A, B, C = phrase(), phrase(), phrase()
+    form = [A, A, B, A, C, C, B, A]
+    notes, t, limit = [], 0.0, minutes * 60.0
+    i = 0
+    while True:
+        for pos, d, m in form[i % len(form)]:
+            s, dur = t + pos * beat, d * beat * 0.92
+            if s + dur > limit:
+                return notes
+            if m is not None:  # None = rest
+                notes.append(Note(s, dur, m, 0.9))
+        t += 8 * beat
+        i += 1
 
 
 def cmd_demo(a):
@@ -53,6 +83,15 @@ def cmd_demo(a):
         write_wav(out / f"melody_s{int(s * 100):03d}.wav", b.melody(notes), b.cfg.sr, 2)
         write_wav(out / f"timbre_s{int(s * 100):03d}.wav", b.native(), b.cfg.sr, 2)
     print(f"wrote 10 files to {out}")
+
+
+def cmd_long(a):
+    S, freqs, fs = drawn_spectrogram(seed=a.seed)
+    notes = make_long_melody(a.minutes, a.seed)
+    b = SeedBuilder(S, freqs, fs, SeedConfig(strength=a.strength, seed=a.seed))
+    y = b.melody(notes)
+    write_wav(a.out, y, b.cfg.sr, 1 if a.mono else 2)
+    print(f"notes={len(notes)} wrote {a.out} ({len(y) / b.cfg.sr:.1f}s)")
 
 
 def cmd_render(a):
@@ -72,6 +111,13 @@ def main(argv=None):
     d.add_argument("--out", required=True)
     d.add_argument("--seed", type=int, default=0)
     d.set_defaults(fn=cmd_demo)
+    lg = sp.add_parser("long", help="full-length melody seed (e.g. --minutes 10)")
+    lg.add_argument("--minutes", type=float, default=10.0)
+    lg.add_argument("--strength", type=float, default=0.5)
+    lg.add_argument("--seed", type=int, default=0)
+    lg.add_argument("--mono", action="store_true", help="half the file size (stereo is only a duplicate)")
+    lg.add_argument("--out", required=True)
+    lg.set_defaults(fn=cmd_long)
     r = sp.add_parser("render")
     r.add_argument("--input", required=True)
     r.add_argument("--notes")
