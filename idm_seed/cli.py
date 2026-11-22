@@ -10,6 +10,7 @@ import pathlib
 import numpy as np
 
 from .draw import drawn_spectrogram
+from .midi import write_midi
 from .melody import SCALES, make_classic_melody as make_long_melody, make_melody  # noqa: F401
 from .pipeline import SeedBuilder, SeedConfig
 from .render import Note, write_wav
@@ -64,6 +65,10 @@ def _melody_kw(a):
     return dict(root=a.root, scale=a.scale, bpm=a.bpm, leap_prob=a.leap) if a.style == "motif" else {}
 
 
+def _bpm(a):
+    return a.bpm if a.style == "motif" else 120.0   # classic is fixed at beat = 0.5 s
+
+
 def notes_to_json(notes):
     return json.dumps([{"start": round(n.start, 4), "dur": round(n.dur, 4), "midi": n.midi,
                         "vel": n.vel} for n in notes], indent=1)
@@ -72,6 +77,8 @@ def notes_to_json(notes):
 def cmd_melody(a):
     notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
     pathlib.Path(a.out).write_text(notes_to_json(notes))
+    if a.midi_out:
+        write_midi(a.midi_out, notes, _bpm(a))
     print(f"wrote {a.out}: {len(notes)} notes, {max(n.start + n.dur for n in notes):.1f}s")
 
 
@@ -80,10 +87,18 @@ def cmd_long(a):
     notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
     if a.notes_out:
         pathlib.Path(a.notes_out).write_text(notes_to_json(notes))
+    if a.midi_out:
+        write_midi(a.midi_out, notes, _bpm(a))
     b = SeedBuilder(S, freqs, fs, SeedConfig(strength=a.strength, seed=a.seed))
     y = b.melody(notes)
     write_wav(a.out, y, b.cfg.sr, 1 if a.mono else 2)
     print(f"notes={len(notes)} wrote {a.out} ({len(y) / b.cfg.sr:.1f}s)")
+
+
+def cmd_tomidi(a):
+    notes = load_notes(a.notes)
+    write_midi(a.out, notes, a.bpm)
+    print(f"wrote {a.out}: {len(notes)} notes at {a.bpm:g} bpm")
 
 
 def cmd_render(a):
@@ -115,17 +130,24 @@ def main(argv=None):
     mg.add_argument("--minutes", type=float, default=3.0)
     mg.add_argument("--seed", type=int, default=0)
     mg.add_argument("--out", required=True)
+    mg.add_argument("--midi-out", help="also write a .mid file")
     melody_opts(mg)
     mg.set_defaults(fn=cmd_melody)
     lg = sp.add_parser("long", help="full-length melody seed (e.g. --minutes 10)")
     melody_opts(lg)
     lg.add_argument("--notes-out", help="also save the notes as JSON")
+    lg.add_argument("--midi-out", help="also write a .mid file")
     lg.add_argument("--minutes", type=float, default=10.0)
     lg.add_argument("--strength", type=float, default=0.5)
     lg.add_argument("--seed", type=int, default=0)
     lg.add_argument("--mono", action="store_true", help="half the file size (stereo is only a duplicate)")
     lg.add_argument("--out", required=True)
     lg.set_defaults(fn=cmd_long)
+    tm = sp.add_parser("tomidi", help="convert a notes JSON to a .mid file")
+    tm.add_argument("--notes", required=True)
+    tm.add_argument("--bpm", type=float, default=120.0, help="tempo written into the file (grid only)")
+    tm.add_argument("--out", required=True)
+    tm.set_defaults(fn=cmd_tomidi)
     r = sp.add_parser("render")
     r.add_argument("--input", required=True)
     r.add_argument("--notes")

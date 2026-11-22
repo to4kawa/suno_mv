@@ -20,6 +20,10 @@ python3 -m pytest idm_seed/tests -q -p no:cacheprovider
   whole_tone), `--bpm`, `--leap` (0 = fully stepwise). `--seed` gives a different melody each time.
   `python3 -m idm_seed melody --style motif --minutes 3 --seed 5 --root 62 --scale dorian --out notes.json`
   writes only the notes; `long ... --notes-out notes.json` renders audio and keeps the notes.
+  MIDI: add `--midi-out x.mid` to `melody` or `long`, or convert any notes JSON with
+  `python3 -m idm_seed tomidi --notes notes.json --bpm 120 --out x.mid` (Standard MIDI File, format 0,
+  480 ticks/beat; the tempo is written into the file so the beat grid matches; pitches are rounded
+  to integers; meant for monophonic melodies).
   Hand-written or other-tool melodies (e.g. from MIDI converted to this JSON) work the same way.
 - Output length always comes from the input (last note end + tail, or frames x frame_sec + tail).
 - `--strength` 0 = leave the drawing as is, 1 = snap (never fully clean). `--variation` and `--ramp`
