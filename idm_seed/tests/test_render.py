@@ -4,7 +4,7 @@ import numpy as np
 
 from idm_seed import Note, SeedBuilder, SeedConfig, write_wav
 from idm_seed.draw import drawn_spectrogram
-from metrics import interpartial_noise_fraction, note_inharmonicity_cents, periodicity, roughness
+from idm_seed.metrics import interpartial_noise_fraction, note_inharmonicity_cents, periodicity, roughness
 
 SR = 44100
 MEL = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]

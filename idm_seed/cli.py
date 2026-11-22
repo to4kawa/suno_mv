@@ -10,6 +10,7 @@ import pathlib
 import numpy as np
 
 from .draw import drawn_spectrogram
+from .metrics import analyze_wav
 from .midi import write_midi
 from .melody import SCALES, make_classic_melody as make_long_melody, make_melody  # noqa: F401
 from .pipeline import SeedBuilder, SeedConfig
@@ -101,6 +102,11 @@ def cmd_tomidi(a):
     print(f"wrote {a.out}: {len(notes)} notes at {a.bpm:g} bpm")
 
 
+def cmd_analyze(a):
+    res = analyze_wav(a.wav, load_notes(a.notes), max_notes=a.max_notes)
+    print(json.dumps(res, indent=1))
+
+
 def cmd_render(a):
     S, freqs, fs = load_spectrogram(a.input, a.fmax, a.frame_sec)
     gs = load_gs(a.gs, S.shape[1]) if a.gs else None
@@ -148,6 +154,11 @@ def main(argv=None):
     tm.add_argument("--bpm", type=float, default=120.0, help="tempo written into the file (grid only)")
     tm.add_argument("--out", required=True)
     tm.set_defaults(fn=cmd_tomidi)
+    an = sp.add_parser("analyze", help="objective metrics of a seed WAV, given its notes JSON")
+    an.add_argument("--wav", required=True)
+    an.add_argument("--notes", required=True)
+    an.add_argument("--max-notes", type=int, default=64)
+    an.set_defaults(fn=cmd_analyze)
     r = sp.add_parser("render")
     r.add_argument("--input", required=True)
     r.add_argument("--notes")

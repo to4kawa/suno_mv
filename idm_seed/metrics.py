@@ -1,8 +1,17 @@
-"""Measure rendered audio: how far partials sit from integer multiples of the note's f0."""
+"""Objective measurements of rendered seeds. They are proxies, not taste: judge with them, then listen.
+
+note_inharmonicity_cents  mean |cents| of partials from integer multiples of f0 (glitch amount)
+periodicity               normalised autocorrelation at the note period (pitch clarity)
+interpartial_noise_fraction  power between partials (flicker / crackle)
+roughness                 Plomp-Levelt beating between close partials
+analyze()                 medians over analysable notes; analyze_wav() reads a WAV first
+"""
+import wave
+
 import numpy as np
 
-from idm_seed.core import find_f0_lowest, find_partials
-from idm_seed.render import midi_to_hz
+from .core import find_f0_lowest, find_partials
+from .render import midi_to_hz
 
 
 def note_inharmonicity_cents(y, sr, note, n_harm=10, nfft=8192):
@@ -71,3 +80,39 @@ def roughness(y, sr, note, nfft=8192, rel=0.02):
     f0 = float(midi_to_hz(note.midi))
     gaps = np.diff(np.sort(fr)) / f0
     return float(d), float(gaps.min()) if len(gaps) else float("nan")
+
+
+def load_wav_mono(path):
+    """16-bit PCM WAV -> (float64 mono in [-1, 1], sample rate). Channels are averaged."""
+    with wave.open(str(path)) as w:
+        if w.getsampwidth() != 2:
+            raise ValueError("only 16-bit PCM WAV is supported")
+        ch, sr, raw = w.getnchannels(), w.getframerate(), w.readframes(w.getnframes())
+    y = np.frombuffer(raw, dtype="<i2").astype(np.float64) / 32768.0
+    return (y.reshape(-1, ch).mean(axis=1) if ch > 1 else y), sr
+
+
+def analyze(y, sr, notes, max_notes=64, min_dur=0.35):
+    """Median of each metric over notes long enough to measure (>= min_dur s). At most
+    max_notes notes, picked evenly (deterministic), keep the cost bounded for 10-minute seeds."""
+    usable = [n for n in notes if n.dur >= min_dur and int((n.start + n.dur / 2) * sr) + 4096 < len(y)]
+    if not usable:
+        raise ValueError(f"no note of at least {min_dur}s to analyse")
+    if len(usable) > max_notes:
+        usable = [usable[i] for i in np.linspace(0, len(usable) - 1, max_notes).round().astype(int)]
+    inh, f0e, per, noi, rgh = [], [], [], [], []
+    for n in usable:
+        d, e, _c = note_inharmonicity_cents(y, sr, n)
+        inh.append(d); f0e.append(e)
+        per.append(periodicity(y, sr, n))
+        noi.append(interpartial_noise_fraction(y, sr, n))
+        rgh.append(roughness(y, sr, n)[0])
+    med = lambda v: float(np.nanmedian(v))
+    return {"notes_analyzed": len(usable), "inharmonicity_cents": med(inh),
+            "periodicity": med(per), "interpartial_noise": med(noi), "roughness": med(rgh),
+            "f0_error_cents_max": float(np.nanmax(f0e))}
+
+
+def analyze_wav(path, notes, **kw):
+    y, sr = load_wav_mono(path)
+    return analyze(y, sr, notes, **kw)
