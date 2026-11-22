@@ -47,7 +47,15 @@ def extract_timbre(S_corr, freqs, f0, n_harm, frame_sec, partial_rel=0.03):
             ratio[~good, k] = np.interp(np.nonzero(~good)[0], np.nonzero(good)[0], ratio[good, k])
         else:
             ratio[:, k] = k + 1
-    return Timbre(frame_sec, ratio, amp)
+    # 3-frame median: removes one-frame dropouts / peak flips that would flicker at audio rate
+    return Timbre(frame_sec, _med3(ratio), _med3(amp))
+
+
+def _med3(x):
+    if len(x) < 3:
+        return x
+    p = np.pad(x, ((1, 1), (0, 0)), mode="edge")
+    return np.median(np.stack([p[:-2], p[1:-1], p[2:]]), axis=0)
 
 
 def _synth(f0_hz, pos, timbre, sr, nyq=0.45):
@@ -62,17 +70,21 @@ def _synth(f0_hz, pos, timbre, sr, nyq=0.45):
     return sig
 
 
-def render_note(note: Note, timbre: Timbre, sr=44100, time_mode="stretch",
+def render_note(note: Note, timbre: Timbre, sr=44100, time_mode="native",
                 attack=0.01, release=0.08):
+    """time_mode 'native': the timbre plays at real speed (frame_sec per frame), reflecting at
+    the ends. 'stretch' squeezes the whole timbre into the note: kept only for comparison,
+    it turns per-frame flicker into audible crackle."""
     N = int(round((note.dur + release) * sr))
     tt = np.arange(N) / sr
     span = (len(timbre.ratio) - 1) * timbre.frame_sec
     if time_mode == "stretch":
         pos = tt / max(note.dur, 1e-9) * span
-    elif time_mode == "loop":
-        pos = np.mod(tt, span + timbre.frame_sec)
-    else:
-        pos = np.full(N, span / 2)
+    elif span <= 0:
+        pos = np.zeros(N)
+    else:  # native: ping-pong so the position is continuous even for notes longer than the timbre
+        p = np.mod(tt, 2 * span)
+        pos = np.where(p > span, 2 * span - p, p)
     pos = np.minimum(pos, span)
     env = np.minimum(1.0, tt / attack)
     rel = tt > note.dur

@@ -4,7 +4,7 @@ import numpy as np
 
 from idm_seed import Note, SeedBuilder, SeedConfig, write_wav
 from idm_seed.draw import drawn_spectrogram
-from metrics import note_inharmonicity_cents
+from metrics import interpartial_noise_fraction, note_inharmonicity_cents, periodicity
 
 SR = 44100
 MEL = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]
@@ -93,3 +93,26 @@ def test_long_melody_generator_is_exact_and_deterministic():
     assert max(n.start + n.dur for n in a) > 595.0        # fills the requested length
     assert all(x.start <= y.start for x, y in zip(a, a[1:]))
     assert make_long_melody(1, 0)[-1].start + make_long_melody(1, 0)[-1].dur <= 60.0
+
+
+def test_no_crackle_between_partials():
+    b, _ = _builder(s=0.5)
+    y = b.melody(NOTES)
+    fr = [interpartial_noise_fraction(y, SR, n) for n in NOTES]
+    assert np.mean(fr) < 0.005, fr     # old stretched rendering measured ~0.03 before smoothing
+
+
+def test_strength_changes_pitch_clarity_a_lot_and_full_snap_is_periodic():
+    means = []
+    for s in (0.0, 0.5, 1.0):
+        b, _ = _builder(s=s)
+        y = b.melody(NOTES)
+        means.append(np.mean([periodicity(y, SR, n) for n in NOTES]))
+    # measured over 4 different drawings: s=0 -> 0.32..0.41, s=1 -> 0.68..0.77
+    assert means[0] < 0.5 and means[2] > 0.6 and means[2] - means[0] > 0.25, means
+    assert means[0] < means[1] < means[2], means
+    S, freqs, fs = drawn_spectrogram(seed=1)
+    ref = SeedBuilder(S, freqs, fs, SeedConfig(strength=1.0, seed=3, variation=0.0, ramp=0.0,
+                                               p_snap=1.0, p_leave=0.0, drift_cents=0.0))
+    yr = ref.melody(NOTES)
+    assert np.mean([periodicity(yr, SR, n) for n in NOTES]) > 0.9

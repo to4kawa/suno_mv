@@ -71,6 +71,10 @@ class HarmonicStructure:
     partial_amp: np.ndarray   # [T, K]
     harmonic_mask: np.ndarray # [T, F] int16, 0 = residual, k = lobe of partial k
 
+    def slice(self, a, b):
+        return HarmonicStructure(self.f0[a:b], self.confidence[a:b], self.partial_hz[a:b],
+                                 self.partial_amp[a:b], self.harmonic_mask[a:b])
+
 
 def detect_harmonic_structure(S, freqs, f0_min=60.0, f0_max=1000.0, n_harm=10,
                               f0_rel=0.25, partial_rel=0.03):

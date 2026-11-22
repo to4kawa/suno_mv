@@ -82,7 +82,11 @@ def cmd_demo(a):
         b = SeedBuilder(S, freqs, fs, SeedConfig(strength=s, seed=a.seed))
         write_wav(out / f"melody_s{int(s * 100):03d}.wav", b.melody(notes), b.cfg.sr, 2)
         write_wav(out / f"timbre_s{int(s * 100):03d}.wav", b.native(), b.cfg.sr, 2)
-    print(f"wrote 10 files to {out}")
+    # reference upper bound: every partial snapped fully to the integer series (no glitch left)
+    ref = SeedBuilder(S, freqs, fs, SeedConfig(strength=1.0, seed=a.seed, variation=0.0, ramp=0.0,
+                                               p_snap=1.0, p_leave=0.0, drift_cents=0.0))
+    write_wav(out / "melody_REF_fully_harmonic.wav", ref.melody(notes), ref.cfg.sr, 2)
+    print(f"wrote 11 files to {out}")
 
 
 def cmd_long(a):
