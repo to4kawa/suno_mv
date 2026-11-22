@@ -10,37 +10,13 @@ import pathlib
 import numpy as np
 
 from .draw import drawn_spectrogram
+from .inputs import load_gs, load_notes, load_spectrogram, notes_to_json  # noqa: F401
 from .metrics import analyze_wav
 from .midi import write_midi
 from .melody import SCALES, make_classic_melody as make_long_melody, make_melody  # noqa: F401
 from .pipeline import SeedBuilder, SeedConfig
+from .recipe import default_config, file_ref, verify, write_seed
 from .render import Note, write_wav
-
-
-def load_spectrogram(path, fmax=8000.0, frame_sec=0.032, sr=16000):
-    """.npy: [T,F] magnitude on a linear axis 0..sr/2.  .png/.jpg: grayscale, x=time,
-    y=frequency (bottom = low, linear 0..fmax), brightness**2 -> magnitude."""
-    p = pathlib.Path(path)
-    if p.suffix == ".npy":
-        S = np.load(p).astype(float)
-        return S, np.linspace(0, sr / 2, S.shape[1]), frame_sec
-    from PIL import Image
-    a = np.asarray(Image.open(p).convert("L"), dtype=float) / 255.0
-    S = (a[::-1].T) ** 2
-    return S, np.linspace(0, fmax, S.shape[1]), frame_sec
-
-
-def load_notes(path):
-    return [Note(float(n["start"]), float(n["dur"]), float(n["midi"]), float(n.get("vel", 1.0)))
-            for n in json.loads(pathlib.Path(path).read_text())]
-
-
-def load_gs(path, n_bins):
-    g = np.load(path).astype(float)
-    g = g.mean(axis=0) if g.ndim == 2 else g
-    if len(g) != n_bins:
-        g = np.interp(np.linspace(0, 1, n_bins), np.linspace(0, 1, len(g)), g)
-    return g
 
 
 DEMO_MELODY = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]
@@ -70,11 +46,6 @@ def _bpm(a):
     return a.bpm if a.style == "motif" else 120.0   # classic is fixed at beat = 0.5 s
 
 
-def notes_to_json(notes):
-    return json.dumps([{"start": round(n.start, 4), "dur": round(n.dur, 4), "midi": n.midi,
-                        "vel": n.vel} for n in notes], indent=1)
-
-
 def cmd_melody(a):
     notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
     pathlib.Path(a.out).write_text(notes_to_json(notes))
@@ -84,16 +55,20 @@ def cmd_melody(a):
 
 
 def cmd_long(a):
-    S, freqs, fs = drawn_spectrogram(seed=a.seed)
-    notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
-    if a.notes_out:
-        pathlib.Path(a.notes_out).write_text(notes_to_json(notes))
-    if a.midi_out:
-        write_midi(a.midi_out, notes, _bpm(a))
-    b = SeedBuilder(S, freqs, fs, SeedConfig(strength=a.strength, seed=a.seed))
-    y = b.melody(notes)
-    write_wav(a.out, y, b.cfg.sr, 1 if a.mono else 2)
-    print(f"notes={len(notes)} wrote {a.out} ({len(y) / b.cfg.sr:.1f}s)")
+    recipe = {"input": {"kind": "drawn", "seed": a.seed},
+              "melody": {"kind": "generator", "style": a.style, "minutes": a.minutes, "seed": a.seed,
+                         "options": _melody_kw(a)},
+              "config": default_config(strength=a.strength, seed=a.seed),
+              "gs": None, "channels": 1 if a.mono else 2}
+    if a.notes_out or a.midi_out:
+        notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
+        if a.notes_out:
+            pathlib.Path(a.notes_out).write_text(notes_to_json(notes))
+        if a.midi_out:
+            write_midi(a.midi_out, notes, _bpm(a))
+    side = write_seed(a.out, recipe)
+    o = side["output"]
+    print(f"notes={o['notes']} wrote {a.out} ({o['seconds']:.1f}s) + {pathlib.Path(a.out).with_suffix('.json').name}")
 
 
 def cmd_tomidi(a):
@@ -108,13 +83,19 @@ def cmd_analyze(a):
 
 
 def cmd_render(a):
-    S, freqs, fs = load_spectrogram(a.input, a.fmax, a.frame_sec)
-    gs = load_gs(a.gs, S.shape[1]) if a.gs else None
-    cfg = SeedConfig(strength=a.strength, seed=a.seed, variation=a.variation, ramp=a.ramp)
-    b = SeedBuilder(S, freqs, fs, cfg, gs_spectrum=gs)
-    y = b.melody(load_notes(a.notes)) if a.notes else b.native()
-    write_wav(a.out, y, cfg.sr, 2)
-    print(f"wrote {a.out} ({len(y) / cfg.sr:.2f}s)")
+    base = pathlib.Path(a.out).resolve().parent
+    recipe = {"input": {"kind": "file", **file_ref(a.input, base), "fmax": a.fmax, "frame_sec": a.frame_sec},
+              "melody": ({"kind": "notes", **file_ref(a.notes, base)} if a.notes else {"kind": "native"}),
+              "config": default_config(strength=a.strength, seed=a.seed, variation=a.variation, ramp=a.ramp),
+              "gs": ({**file_ref(a.gs, base)} if a.gs else None), "channels": 2}
+    side = write_seed(a.out, recipe)
+    print(f"wrote {a.out} ({side['output']['seconds']:.2f}s) + {pathlib.Path(a.out).with_suffix('.json').name}")
+
+
+def cmd_verify(a):
+    res = verify(a.sidecar)
+    print(json.dumps(res, indent=1))
+    raise SystemExit(0 if res["rebuild_matches_sidecar"] and res["file_matches_sidecar"] in (True, None) else 1)
 
 
 def main(argv=None):
@@ -159,6 +140,9 @@ def main(argv=None):
     an.add_argument("--notes", required=True)
     an.add_argument("--max-notes", type=int, default=64)
     an.set_defaults(fn=cmd_analyze)
+    vf = sp.add_parser("verify", help="check a seed.json: WAV unchanged, and the recipe rebuilds it bit-for-bit")
+    vf.add_argument("--sidecar", required=True)
+    vf.set_defaults(fn=cmd_verify)
     r = sp.add_parser("render")
     r.add_argument("--input", required=True)
     r.add_argument("--notes")

@@ -123,10 +123,16 @@ def normalize_peak(y, peak_dbfs=-1.0):
     return y if p == 0 else y * (10 ** (peak_dbfs / 20) / p)
 
 
-def write_wav(path, y, sr=44100, channels=2):
+def to_pcm(y, channels=2):
+    """float [-1,1] -> interleaved little-endian int16 samples (the exact data written to WAV)."""
     pcm = np.round(np.clip(y, -1.0, 1.0) * 32767).astype("<i2")
     if channels == 2:
         pcm = np.repeat(pcm[:, None], 2, axis=1).reshape(-1)
+    return pcm
+
+
+def write_wav(path, y, sr=44100, channels=2):
+    pcm = to_pcm(y, channels)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(channels)
         w.setsampwidth(2)
