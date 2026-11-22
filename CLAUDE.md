@@ -8,7 +8,16 @@ The project is being redirected from the MV maker to a new purpose: **`idm_spect
 
 - Spec (source of truth for this task): [docs/tasks/idm_spectrogram_filter.yaml](docs/tasks/idm_spectrogram_filter.yaml)
 - Never fully clean the harmonic relationships; keeping glitch and intermediate states is the point (`correction_strength` ~0.3–0.7).
-- **Undecided (ask the user, do not assume):** implementation language/stack, where the new code lives (design under review), and what `gs_spectrum` ("GS" source) concretely is.
+- Goal of this repo: make audio **seeds** (timbre + melody WAV) that the owner uploads to Suno and then processes with Cover / Extend. Seed length is variable: ~10 s timbre-only, up to full-length (10 min) melodies.
+- **Decided (do not re-ask):** Python + numpy in `idm_seed/` next to the untouched MV code; `gs_spectrum` = mean spectrum of Roland GS sound-source renders (`.npy`, optional `--gs`); input = `.npy` [T,F] or PNG (x = time, y = frequency, bottom = low, linear 0..8 kHz); internal axis is linear Hz.
+- **Still unverified:** Suno's official upload limits (help.suno.com is not reachable from cloud sessions; the owner says 10-minute audio works). Never state Suno limits as fact.
+
+## idm_seed (the new work)
+
+- `core.py` partial detection + seeded partial correction; `render.py` additive synthesis + WAV; `pipeline.py` per-note windows/strength; `cli.py`; `draw.py` synthetic drawn input; `tests/` pytest.
+- Each note plays its own window of the drawing at real speed (never stretch the whole drawing into a note: that made crackle), with its own glitch plan, strength jitter and strength morph.
+- Quality checks that matter (all in `idm_seed/tests/metrics.py`): periodicity (pitch clarity), inter-partial noise, roughness (beating between close partials = the "crackle"). Judge changes with these, then ask the owner to listen; Claude cannot listen.
+- `python -m idm_seed demo --out DIR` (A/B at s=0..1 plus a fully-harmonic REF), `python -m idm_seed long --minutes 10 --mono --out f.wav`, `python -m idm_seed render --input ... [--notes n.json] [--gs gs.npy]`.
 
 ## Existing code: Suno MV Maker (kept as-is; do not modify unless asked)
 
@@ -22,6 +31,7 @@ Suno MV Maker: a Tauri desktop app. The renderer (`public/`, plain HTML/JS) call
 - `src-tauri/src/` Rust backend (`lib.rs`, `main.rs`, `bridge/`)
 - `src-tauri/tests/` Rust integration tests (`bridge_protocol.rs`)
 - `test/` Node tests for the renderer
+- `idm_seed/` Python package (new work, see above) and its pytest suite
 - `contracts/browser_bridge.spec.yaml` bridge contract
 - `docs/` `adr/`, `architecture/`, `protocol/`, `implementation/`, `reviews/`
 
@@ -33,6 +43,7 @@ npm test                                              # node --test (renderer)
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test  --manifest-path src-tauri/Cargo.toml
 npm start                                             # tauri dev (needs Tauri deps + FFmpeg on PATH)
+python3 -m pytest idm_seed/tests -q -p no:cacheprovider   # new package, ~10 s, numpy only
 ```
 
 Per AGENTS.md, do not run long builds or tests unless asked. Network in cloud sessions may block crate/npm downloads, so `cargo` and `npm install` can fail there; report that as unverified, not as passing.

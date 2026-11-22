@@ -4,7 +4,7 @@ import numpy as np
 
 from idm_seed import Note, SeedBuilder, SeedConfig, write_wav
 from idm_seed.draw import drawn_spectrogram
-from metrics import interpartial_noise_fraction, note_inharmonicity_cents, periodicity
+from metrics import interpartial_noise_fraction, note_inharmonicity_cents, periodicity, roughness
 
 SR = 44100
 MEL = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]
@@ -116,3 +116,19 @@ def test_strength_changes_pitch_clarity_a_lot_and_full_snap_is_periodic():
                                                p_snap=1.0, p_leave=0.0, drift_cents=0.0))
     yr = ref.melody(NOTES)
     assert np.mean([periodicity(yr, SR, n) for n in NOTES]) > 0.9
+
+
+def test_roughness_falls_as_correction_rises_and_ref_is_smoothest():
+    """Beating between close partials (rough/crackly) is what a strong glitch input sounds like;
+    correction spreads partials apart, so roughness must fall: s=0 > s=1 > fully-harmonic ref."""
+    vals = []
+    for s in (0.0, 1.0):
+        b, _ = _builder(s=s)
+        y = b.melody(NOTES)
+        vals.append(np.mean([roughness(y, SR, n)[0] for n in NOTES]))
+    S, freqs, fs = drawn_spectrogram(seed=1)
+    ref = SeedBuilder(S, freqs, fs, SeedConfig(strength=1.0, seed=3, variation=0.0, ramp=0.0,
+                                               p_snap=1.0, p_leave=0.0, drift_cents=0.0))
+    vals.append(np.mean([roughness(ref.melody(NOTES), SR, n)[0] for n in NOTES]))
+    assert vals[0] > vals[1] > vals[2], vals
+    assert vals[0] > 2 * vals[2], vals

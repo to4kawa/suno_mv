@@ -50,3 +50,24 @@ def periodicity(y, sr, note, n=4096):
         a, b = x[:-lag], x[lag:]
         best = max(best, float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)))
     return best
+
+
+def roughness(y, sr, note, nfft=8192, rel=0.02):
+    """Plomp-Levelt / Sethares sensory dissonance of the partials in the middle of a note.
+    Higher = more beating between close partials (rough, crackly). Also returns the smallest
+    spacing between adjacent partials in units of the note f0."""
+    mid = int((note.start + note.dur / 2) * sr)
+    seg = y[mid - nfft // 2: mid + nfft // 2]
+    sp = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+    f = np.fft.rfftfreq(len(seg), 1 / sr)
+    pk = np.nonzero((sp[1:-1] > sp[:-2]) & (sp[1:-1] >= sp[2:]) & (sp[1:-1] >= rel * sp.max()))[0] + 1
+    fr, am = f[pk], sp[pk] / sp.max()
+    d = 0.0
+    for i in range(len(fr)):
+        for j in range(i + 1, len(fr)):
+            lo = min(fr[i], fr[j]); df = abs(fr[i] - fr[j])
+            s = 0.24 / (0.0207 * lo + 18.96)
+            d += am[i] * am[j] * (np.exp(-3.5 * s * df) - np.exp(-5.75 * s * df))
+    f0 = float(midi_to_hz(note.midi))
+    gaps = np.diff(np.sort(fr)) / f0
+    return float(d), float(gaps.min()) if len(gaps) else float("nan")
