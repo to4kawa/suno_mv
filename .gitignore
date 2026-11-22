@@ -24,3 +24,8 @@ build/
 
 # Local diagnostics
 debug/*.json
+
+# idm_seed
+__pycache__/
+*.pyc
+.pytest_cache/
