@@ -14,6 +14,13 @@ python3 -m pytest idm_seed/tests -q -p no:cacheprovider
 ```
 
 - `notes.json`: `[{"start": sec, "dur": sec, "midi": 57, "vel": 0.9}, ...]` (midi may be fractional).
+- Melody makers (`--style`): `classic` (original: fixed A minor pentatonic, 120 bpm, jumpy) and
+  `motif` (stepwise, 2-bar motif + answer, cadence on tonic/fifth, form A A B A C C B A) with
+  `--root` (MIDI tonic, 57 = A3), `--scale` (minor, major, dorian, phrygian, minor/major_pentatonic,
+  whole_tone), `--bpm`, `--leap` (0 = fully stepwise). `--seed` gives a different melody each time.
+  `python3 -m idm_seed melody --style motif --minutes 3 --seed 5 --root 62 --scale dorian --out notes.json`
+  writes only the notes; `long ... --notes-out notes.json` renders audio and keeps the notes.
+  Hand-written or other-tool melodies (e.g. from MIDI converted to this JSON) work the same way.
 - Output length always comes from the input (last note end + tail, or frames x frame_sec + tail).
 - `--strength` 0 = leave the drawing as is, 1 = snap (never fully clean). `--variation` and `--ramp`
   make every note differ (strength jitter, messy-to-tidy morph inside a note).

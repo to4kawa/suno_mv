@@ -10,6 +10,7 @@ import pathlib
 import numpy as np
 
 from .draw import drawn_spectrogram
+from .melody import SCALES, make_classic_melody as make_long_melody, make_melody  # noqa: F401
 from .pipeline import SeedBuilder, SeedConfig
 from .render import Note, write_wav
 
@@ -41,36 +42,6 @@ def load_gs(path, n_bins):
 
 
 DEMO_MELODY = [57, 60, 64, 62, 60, 67, 65, 64, 69, 67, 64, 60, 62, 65, 64, 57]
-PENTA = [57, 60, 62, 64, 67, 69, 72]  # A minor pentatonic-ish, A3..C5
-
-
-def make_long_melody(minutes, seed=0, beat=0.5):
-    """Seeded phrase-structured melody (sections repeat, so Cover has a skeleton to follow).
-    Length is exact to the last note: the last note ends at or just before `minutes`."""
-    rng = np.random.default_rng(seed)
-
-    def phrase():
-        pos, out = 0, []
-        while pos < 8:
-            d = float(rng.choice([0.5, 1.0, 1.0, 2.0]))
-            d = min(d, 8 - pos)
-            out.append((pos, d, int(PENTA[int(rng.integers(0, len(PENTA)))]) if rng.random() > 0.12 else None))
-            pos += d
-        return out
-
-    A, B, C = phrase(), phrase(), phrase()
-    form = [A, A, B, A, C, C, B, A]
-    notes, t, limit = [], 0.0, minutes * 60.0
-    i = 0
-    while True:
-        for pos, d, m in form[i % len(form)]:
-            s, dur = t + pos * beat, d * beat * 0.92
-            if s + dur > limit:
-                return notes
-            if m is not None:  # None = rest
-                notes.append(Note(s, dur, m, 0.9))
-        t += 8 * beat
-        i += 1
 
 
 def cmd_demo(a):
@@ -89,9 +60,26 @@ def cmd_demo(a):
     print(f"wrote 11 files to {out}")
 
 
+def _melody_kw(a):
+    return dict(root=a.root, scale=a.scale, bpm=a.bpm, leap_prob=a.leap) if a.style == "motif" else {}
+
+
+def notes_to_json(notes):
+    return json.dumps([{"start": round(n.start, 4), "dur": round(n.dur, 4), "midi": n.midi,
+                        "vel": n.vel} for n in notes], indent=1)
+
+
+def cmd_melody(a):
+    notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
+    pathlib.Path(a.out).write_text(notes_to_json(notes))
+    print(f"wrote {a.out}: {len(notes)} notes, {max(n.start + n.dur for n in notes):.1f}s")
+
+
 def cmd_long(a):
     S, freqs, fs = drawn_spectrogram(seed=a.seed)
-    notes = make_long_melody(a.minutes, a.seed)
+    notes = make_melody(a.style, a.minutes, a.seed, **_melody_kw(a))
+    if a.notes_out:
+        pathlib.Path(a.notes_out).write_text(notes_to_json(notes))
     b = SeedBuilder(S, freqs, fs, SeedConfig(strength=a.strength, seed=a.seed))
     y = b.melody(notes)
     write_wav(a.out, y, b.cfg.sr, 1 if a.mono else 2)
@@ -115,7 +103,23 @@ def main(argv=None):
     d.add_argument("--out", required=True)
     d.add_argument("--seed", type=int, default=0)
     d.set_defaults(fn=cmd_demo)
+    def melody_opts(q):
+        q.add_argument("--style", choices=["classic", "motif"], default="classic",
+                       help="classic = original (fixed A minor pentatonic, 120 bpm); motif = stepwise, key/scale/bpm options")
+        q.add_argument("--root", type=int, default=57, help="motif: tonic as MIDI note (57 = A3)")
+        q.add_argument("--scale", choices=sorted(SCALES), default="minor", help="motif: scale")
+        q.add_argument("--bpm", type=float, default=120.0, help="motif: tempo")
+        q.add_argument("--leap", type=float, default=0.12, help="motif: probability of a leap (0 = fully stepwise)")
+
+    mg = sp.add_parser("melody", help="write only the notes JSON (use with render --notes)")
+    mg.add_argument("--minutes", type=float, default=3.0)
+    mg.add_argument("--seed", type=int, default=0)
+    mg.add_argument("--out", required=True)
+    melody_opts(mg)
+    mg.set_defaults(fn=cmd_melody)
     lg = sp.add_parser("long", help="full-length melody seed (e.g. --minutes 10)")
+    melody_opts(lg)
+    lg.add_argument("--notes-out", help="also save the notes as JSON")
     lg.add_argument("--minutes", type=float, default=10.0)
     lg.add_argument("--strength", type=float, default=0.5)
     lg.add_argument("--seed", type=int, default=0)
