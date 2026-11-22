@@ -10,6 +10,7 @@ import pathlib
 import numpy as np
 
 from .draw import drawn_spectrogram
+from . import library as lib
 from .inputs import load_gs, load_notes, load_spectrogram, notes_to_json  # noqa: F401
 from .metrics import analyze_wav
 from .midi import write_midi
@@ -89,6 +90,41 @@ def cmd_batch(a):
             m = r["metrics"]
             print(f"  [{r['group']}] #{r['rank']} score={r['score']:.3f} periodicity={m['periodicity']:.2f} "
                   f"roughness={m['roughness']:.4f}  {r['wav']}")
+
+
+def cmd_library(a):
+    if a.lib_cmd == "add":
+        files = sorted(pathlib.Path(a.dir).glob("*.json")) if a.dir else [pathlib.Path(a.sidecar)]
+        n = 0
+        for f in files:
+            if f.name in ("batch.json",):
+                continue
+            rec = lib.add_seed(a.library, f, tags=a.tags.split(",") if a.tags else ())
+            n += 1
+            print(f"added {rec['id']}  {rec['wav']}")
+        print(f"{n} seed(s) -> {a.library}")
+    elif a.lib_cmd == "note":
+        rec = lib.add_note(a.library, a.id, rating=a.rating, engine=a.engine, mode=a.mode,
+                           text=a.text or "", tags=a.tags.split(",") if a.tags else ())
+        print(f"noted {rec['id']}: rating={rec['rating']} {rec['engine']}/{rec['mode']} {rec['text'][:60]}")
+    elif a.lib_cmd == "list":
+        rows, broken = lib.table(a.library)
+        if a.min_rating is not None:
+            rows = [r for r in rows if r["rating"] is not None and r["rating"] >= a.min_rating]
+        key = {"rating": lambda r: -(r["rating"] if r["rating"] is not None else -1),
+               "periodicity": lambda r: -((r.get("metrics") or {}).get("periodicity", -1)),
+               "added": lambda r: r["added_utc"]}[a.sort]
+        for r in sorted(rows, key=key):
+            m = r.get("metrics") or {}
+            note = (r["last_note"] or {}).get("text", "")[:40]
+            rating = "-" if r["rating"] is None else "%.1f" % r["rating"]
+            per = m.get("periodicity", float("nan"))
+            print("%s  rating=%s  s=%s  per=%.2f  %s  %s"
+                  % (r["id"], rating, r["summary"].get("strength"), per, r["wav"], note))
+        if broken:
+            print(f"({broken} unreadable line(s) ignored)")
+    elif a.lib_cmd == "stats":
+        print(json.dumps(lib.stats(a.library), indent=1, ensure_ascii=False))
 
 
 def cmd_tomidi(a):
@@ -176,6 +212,24 @@ def main(argv=None):
     bt.add_argument("--mono", action="store_true")
     bt.add_argument("--out", required=True)
     bt.set_defaults(fn=cmd_batch)
+    lb = sp.add_parser("library", help="append-only seed library with your notes on how seeds did in Suno")
+    lb.add_argument("--library", default="library.jsonl")
+    ls = lb.add_subparsers(dest="lib_cmd", required=True)
+    la = ls.add_parser("add", help="register seed(s) from sidecar json file(s)")
+    g = la.add_mutually_exclusive_group(required=True)
+    g.add_argument("--sidecar"); g.add_argument("--dir", help="register every sidecar in a folder (e.g. a batch output)")
+    la.add_argument("--tags")
+    ln = ls.add_parser("note", help="record how a seed did (id or unique prefix of 4+ chars)")
+    ln.add_argument("--id", required=True)
+    ln.add_argument("--rating", type=int, help="1-5")
+    ln.add_argument("--engine", default="suno")
+    ln.add_argument("--mode", help="cover / extend / ...")
+    ln.add_argument("--text"); ln.add_argument("--tags")
+    ll = ls.add_parser("list")
+    ll.add_argument("--sort", choices=["rating", "periodicity", "added"], default="rating")
+    ll.add_argument("--min-rating", type=float)
+    ls.add_parser("stats", help="rank correlation between metrics and your ratings + suggested score weights")
+    lb.set_defaults(fn=cmd_library)
     vf = sp.add_parser("verify", help="check a seed.json: WAV unchanged, and the recipe rebuilds it bit-for-bit")
     vf.add_argument("--sidecar", required=True)
     vf.set_defaults(fn=cmd_verify)

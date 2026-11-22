@@ -31,6 +31,31 @@ python3 -m pytest idm_seed/tests -q -p no:cacheprovider
 - `--gs gs.npy` enables the novelty filter against the mean spectrum of GS sound-source renders.
 - Input PNG: x = time, y = frequency (bottom = low, linear 0..8 kHz by default), brightness squared = magnitude.
 
+## Workflow tools (record, rank, remember)
+
+```bash
+# every long/render run writes seed.json next to seed.wav: recipe, PCM hash, metrics, environment
+python3 -m idm_seed verify --sidecar seed.json         # WAV unchanged? recipe still rebuilds it bit-for-bit?
+python3 -m idm_seed analyze --wav seed.wav --notes notes.json   # periodicity / roughness / noise / inharmonicity
+
+# render a grid, score every candidate, keep the best per strength (WAV + sidecar), write ranking.csv
+python3 -m idm_seed batch --style motif --minutes 2 --root 57 --scale minor --bpm 110 \
+    --grid config.seed=0,1,2,3 --grid config.strength=0.3,0.5,0.7 --keep 1 --mono --out cands/
+
+# remember what Suno did with them (append-only library.jsonl; notes may be Japanese)
+python3 -m idm_seed library add --dir cands/ --tags A_minor
+python3 -m idm_seed library note --id d6e0 --rating 4 --mode cover --text "structure carried"
+python3 -m idm_seed library list --sort rating
+python3 -m idm_seed library stats    # after >= 5 rated seeds: rank correlation metric vs rating + suggested weights
+```
+
+- The score is a **playability index** (clear pitch, little beating, little noise), not taste; its
+  weights are uncalibrated. Ranking is inside groups (`--group-by`, default `config.strength`) so strength
+  stays your creative choice. Feed `library stats` suggestions back with `batch --weights w.json`.
+- Grid paths address the recipe (`config.*`, `melody.seed`, `melody.options.scale`, `input.seed`).
+- `verify` also reports `same_numpy`: another numpy/Python build may differ in the last bits.
+- Python syntax is kept compatible with 3.9 (checked at parse level only); numpy is the only dependency.
+
 Known limits: residual (non-harmonic) content is dropped by additive synthesis; f0 is the lowest
 significant peak (a missing fundamental is not handled); results were judged with objective metrics
 and the owner's listening, Suno's behaviour is not modelled.

@@ -17,6 +17,7 @@ The project is being redirected from the MV maker to a new purpose: **`idm_spect
 - `core.py` partial detection + seeded partial correction; `render.py` additive synthesis + WAV; `pipeline.py` per-note windows/strength; `cli.py`; `draw.py` synthetic drawn input; `tests/` pytest.
 - Each note plays its own window of the drawing at real speed (never stretch the whole drawing into a note: that made crackle), with its own glitch plan, strength jitter and strength morph.
 - Quality checks that matter (all in `idm_seed/tests/metrics.py`): periodicity (pitch clarity), inter-partial noise, roughness (beating between close partials = the "crackle"). Judge changes with these, then ask the owner to listen; Claude cannot listen.
+- Workflow tools: every `long`/`render` writes `seed.json` (recipe + PCM hash + metrics); `verify`, `analyze`, `batch` (grid -> metric score -> top N per strength group), `library` (append-only `library.jsonl`: seeds + the owner's Suno ratings, `stats` suggests score weights). The score is an uncalibrated playability index: never present a rank as 'better sounding' without the owner's listening.
 - `python -m idm_seed demo --out DIR` (A/B at s=0..1 plus a fully-harmonic REF), `python -m idm_seed long --minutes 10 --mono --out f.wav`, `python -m idm_seed render --input ... [--notes n.json] [--gs gs.npy]`.
 
 ## Existing code: Suno MV Maker (kept as-is; do not modify unless asked)
