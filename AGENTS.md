@@ -1,176 +1,88 @@
-\# AGENTS
+# AGENTS
 
-
-
-\## Purpose
-
-
+## Purpose
 
 This document defines how AI agents should work in this repository.
 
-
-
 Project contracts are defined under:
 
-
-
-\- contracts/
-
-
+- contracts/
 
 Architecture documents remain the source of truth.
 
+---
 
-
-\---
-
-
-
-\## Workflow
-
-
+## Workflow
 
 Before making any changes:
 
+1. Read:
+   - AGENTS.md
+   - contracts/
+   - docs/adr/
+   - docs/architecture/
+   - docs/protocol/
+   - docs/implementation/
+   - docs/reviews/ (if relevant)
 
+2. Summarize your understanding.
 
-1\. Read:
+3. Propose an implementation plan.
 
-&#x20;  - AGENTS.md
+4. Wait for approval if architecture changes.
 
-&#x20;  - contracts/
+5. Implement in small reviewable commits.
 
-&#x20;  - docs/adr/
+6. Summarize completed work.
 
-&#x20;  - docs/architecture/
+7. Recommend manual verification steps.
 
-&#x20;  - docs/protocol/
+---
 
-&#x20;  - docs/implementation/
-
-&#x20;  - docs/reviews/ (if relevant)
-
-
-
-2\. Summarize your understanding.
-
-
-
-3\. Propose an implementation plan.
-
-
-
-4\. Wait for approval if architecture changes.
-
-
-
-5\. Implement in small reviewable commits.
-
-
-
-6\. Summarize completed work.
-
-
-
-7\. Recommend manual verification steps.
-
-
-
-\---
-
-
-
-\## Development Principles
-
-
+## Development Principles
 
 Do not break existing workflows.
 
-
-
 Prefer incremental changes.
-
-
 
 Implement small reviewable commits.
 
-
-
 Avoid unrelated refactoring.
-
-
 
 Introduce isolated module skeletons before integrating them into the application.
 
-
-
 Integrate new components only after their interfaces have been reviewed.
 
+---
 
-
-\---
-
-
-
-\## Coding Style
-
-
+## Coding Style
 
 Prefer pure functions.
 
-
-
 Separate protocol parsing from transport.
-
-
 
 Keep UI and backend loosely coupled.
 
-
-
 Avoid global mutable state.
 
+---
 
-
-\---
-
-
-
-\## Testing
-
-
+## Testing
 
 Prefer targeted unit tests.
 
-
-
 Do not automatically run long-running build or test commands unless explicitly requested.
-
-
 
 Summarize recommended manual verification after implementation.
 
+---
 
-
-\---
-
-
-
-\## Review
-
-
+## Review
 
 If implementation conflicts with a contract or architecture document:
 
-
-
 Stop.
-
-
 
 Explain the conflict.
 
-
-
 Do not guess.
-
