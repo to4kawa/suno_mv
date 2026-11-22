@@ -1,0 +1,44 @@
+task: idm_spectrogram_filter
+description: |
+  画像生成的に自由に描いたスペクトログラムを入力とし、
+  物理的にありえない倍音関係を意図的に不完全に整えてIDM的な音色を作る。
+
+input:
+  type: spectrogram  # または magnitude spectrogram (2D array)
+  format: [time_frames, freq_bins]  # 例: mel or linear
+  optional_reference: gs_spectrum  # GS音源の平均スペクトル（距離計算用）
+
+steps:
+  - name: detect_harmonic_structure
+    description: 基本周波数と倍音関係を推定（完全でなくてもよい）
+    output: estimated_f0, harmonic_mask
+
+  - name: apply_partial_correction
+    description: |
+      倍音関係を「完全には」整えない。
+      一部の成分だけ整数倍に寄せ、残りは意図的にずらす or 残す。
+    parameters:
+      correction_strength: 0.3 ~ 0.7  # 0=完全放置, 1=完全補正
+      preserve_glitch: true
+      target: partial_harmonic_alignment
+
+  - name: novelty_filter
+    description: GSスペクトルとの距離が近すぎる場合はさらに崩す or 棄却
+    condition: cosine_similarity < threshold
+    optional: true
+
+  - name: output
+    description: 整えた（不完全に）スペクトログラムを返す
+    format: same as input
+    post_process: optional_vocoder  # 位相は後段に任せる
+
+style_hints:
+  - 壊れているけど制御されている
+  - 整える途中の中間状態を積極的に使う
+  - IDM的な不安定さ・グリッチ感を残す
+  - 完全にきれいな倍音関係にしない
+
+notes: |
+  A4のような単音でも、倍音を不完全に整えることで
+  「新しいけど壊れた」音色が作りやすい。
+  位相の最終処理は後段（加算合成 or ボコーダー）に任せる前提。
